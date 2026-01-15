@@ -8,7 +8,16 @@
     "dev:webhook": "ngrok http --url=intershop-hymnless-jena.ngrok-free.dev 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:push": "drizzle-kit push",
+    "db:migrate-username": "tsx scripts/migrate-to-username.ts",
+    "db:check": "tsx scripts/check-db.ts",
+    "db:update-users": "psql $DATABASE_URL -f scripts/update-users-table.sql",
+    "db:fix": "psql $DATABASE_URL -f scripts/fix-users-table.sql",
+    "db:setup": "tsx scripts/setup-db.ts",
+    "clear:clerk": "node scripts/clear-clerk-session.js"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.36.5",

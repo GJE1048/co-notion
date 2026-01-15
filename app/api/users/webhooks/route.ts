@@ -54,14 +54,27 @@ export async function POST(req:Request) {
     if(eventType === "user.created"){
         const { data } = evt
 
+        // 生成唯一的用户名：优先使用 username，否则使用 email 前缀，最后使用 clerkId
+        const username = data.username
+            || data.email_addresses?.[0]?.email_address?.split('@')[0]
+            || `user_${data.id.slice(0, 8)}`;
+
         const newUser = {
             clerkId: data.id,
-            lastName: data.last_name ?? "",
-            firstName: data.first_name ?? "",
+            username: username,
             imageUrl: data.image_url ?? "https://ui-avatars.com/api/?name=John+Doe",
         } satisfies typeof users.$inferInsert;
 
-        await db.insert(users).values(newUser);
+        try {
+            await db.insert(users).values(newUser);
+        } catch {
+            // 如果用户名冲突，添加随机后缀
+            const uniqueUsername = `${username}_${Date.now().toString().slice(-6)}`;
+            await db.insert(users).values({
+                ...newUser,
+                username: uniqueUsername,
+            });
+        }
     }
 
     if(eventType === "user.deleted"){
@@ -77,15 +90,23 @@ export async function POST(req:Request) {
     if(eventType === "user.updated"){
         const { data } = evt
 
+        // 生成用户名（如果提供了新的 username）
+        const username = data.username
+            || data.email_addresses?.[0]?.email_address?.split('@')[0];
+
+        const updateData: Partial<typeof users.$inferInsert> = {
+            imageUrl: data.image_url,
+        };
+
+        if (username) {
+            updateData.username = username;
+        }
+
         await db
             .update(users)
-            .set({
-                firstName:data.first_name || "",
-                lastName:data.last_name || "",
-                imageUrl:data.image_url
-            })
+            .set(updateData)
+            .where(eq(users.clerkId, data.id));
     }
 
     return new Response("Webhook received",{status:200})
-
 }

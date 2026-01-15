@@ -1,11 +1,12 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+import { useAuth } from "@clerk/nextjs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   FileText,
-  BookOpen,
   Briefcase,
   GraduationCap,
   Lightbulb,
@@ -49,13 +50,45 @@ const templateCategories = [
 ];
 
 export const TemplatesSection = () => {
+  const router = useRouter();
+  const { isSignedIn, isLoaded } = useAuth();
+
+  const handleBrowseAllClick = () => {
+    if (!isLoaded) return;
+
+    if (!isSignedIn) {
+      router.push("/sign-in");
+      return;
+    }
+
+    // TODO: 实现模板浏览页面
+    router.push("/templates");
+  };
+
+  const handleTemplateClick = (templateName: string) => {
+    if (!isLoaded) return;
+
+    if (!isSignedIn) {
+      router.push("/sign-in");
+      return;
+    }
+
+    // TODO: 实现模板使用逻辑
+    console.log("使用模板:", templateName);
+  };
+
   return (
     <Card className="shadow-lg border-0 bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-xl font-semibold text-slate-900 dark:text-slate-100">
           推荐模板
         </CardTitle>
-        <Button variant="ghost" size="sm" className="text-slate-600 dark:text-slate-400">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-slate-600 dark:text-slate-400"
+          onClick={handleBrowseAllClick}
+        >
           浏览全部
         </Button>
       </CardHeader>
@@ -77,6 +110,7 @@ export const TemplatesSection = () => {
                 <div
                   key={index}
                   className="group p-4 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all cursor-pointer"
+                  onClick={() => handleTemplateClick(template.name)}
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="p-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400 group-hover:bg-slate-200 dark:group-hover:bg-slate-600 transition-colors">

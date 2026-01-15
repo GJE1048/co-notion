@@ -1,5 +1,7 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+import { useAuth } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -17,6 +19,7 @@ const quickActions = [
     icon: FileText,
     action: "new-document",
     color: "bg-blue-500 hover:bg-blue-600",
+    href: "/documents/new",
   },
   {
     title: "邀请协作者",
@@ -24,6 +27,7 @@ const quickActions = [
     icon: Users,
     action: "invite-collaborators",
     color: "bg-green-500 hover:bg-green-600",
+    href: "/documents",
   },
   {
     title: "AI写作助手",
@@ -31,6 +35,7 @@ const quickActions = [
     icon: Zap,
     action: "ai-assistant",
     color: "bg-purple-500 hover:bg-purple-600",
+    href: "/documents",
   },
   {
     title: "浏览模板",
@@ -38,6 +43,7 @@ const quickActions = [
     icon: BookOpen,
     action: "browse-templates",
     color: "bg-orange-500 hover:bg-orange-600",
+    href: "/templates",
   },
   {
     title: "数据分析",
@@ -45,13 +51,32 @@ const quickActions = [
     icon: BarChart3,
     action: "analytics",
     color: "bg-indigo-500 hover:bg-indigo-600",
+    href: "/documents",
   },
 ];
 
 export const QuickActions = () => {
-  const handleAction = (action: string) => {
-    // 这里可以添加具体的操作逻辑
-    console.log("执行操作:", action);
+  const router = useRouter();
+  const { isSignedIn, isLoaded } = useAuth();
+
+  const handleAction = (action: string, href?: string) => {
+    // 如果认证状态还未加载，等待
+    if (!isLoaded) {
+      return;
+    }
+
+    // 如果用户未登录，跳转到登录页面
+    if (!isSignedIn) {
+      router.push("/sign-in");
+      return;
+    }
+
+    // 用户已登录，执行正常操作
+    if (href) {
+      router.push(href);
+    } else {
+      console.log("执行操作:", action);
+    }
   };
 
   return (
@@ -68,7 +93,7 @@ export const QuickActions = () => {
               key={action.action}
               variant="ghost"
               className="h-auto p-4 flex flex-col items-center gap-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all duration-200 group"
-              onClick={() => handleAction(action.action)}
+              onClick={() => handleAction(action.action, action.href)}
             >
               <div className={`p-3 rounded-full text-white ${action.color} group-hover:scale-110 transition-transform duration-200`}>
                 <action.icon size={20} />

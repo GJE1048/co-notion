@@ -2,7 +2,6 @@ import { relations } from "drizzle-orm";
 import { 
   foreignKey, 
   pgTable, 
-  primaryKey, 
   text, 
   timestamp,
   uniqueIndex,
@@ -16,31 +15,31 @@ import {
 
 export const users = pgTable("users",{
     id: uuid("id").primaryKey().defaultRandom(),
-    firstName: text("first_name").notNull(),
-    lastName: text("last_name").notNull(),
+    username: text("username").notNull().unique(),
     clerkId: text("clerk_id").notNull().unique(),
     imageUrl: text("image_url").notNull().default("https://ui-avatars.com/api/?name=John+Doe"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
 },(table)=>({
     clerkIdIdx: uniqueIndex("clerk_id_idx").on(table.clerkId),
+    usernameIdx: uniqueIndex("username_idx").on(table.username),
 }));
 
 
 export const documents = pgTable("documents",{
     id: uuid("id").primaryKey().defaultRandom(),
     title: text("title").notNull(),
-    userId: uuid("user_id").references(()=>users.id),
+    content: text("content").notNull().default(""),
+    userId: uuid("user_id").references(()=>users.id).notNull(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
-},(table)=>([
-    primaryKey({ columns: [table.userId, table.id] }),
-    foreignKey({
+},(table)=>({
+    foreignKey: foreignKey({
         columns: [table.userId],
         foreignColumns: [users.id],
         name: "fk_documents_user_id",
     }),
-]));
+}));
 export const usersRelations = relations(users,({many})=>({
     documents: many(documents),
 }));
