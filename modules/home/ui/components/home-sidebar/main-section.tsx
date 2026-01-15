@@ -2,14 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useAuth, useClerk } from "@clerk/nextjs";
 import { FlameIcon, HomeIcon, PlaySquareIcon } from "lucide-react";
 
-import { 
-  SidebarGroup, 
-  SidebarGroupContent, 
-  SidebarMenu, 
-  SidebarMenuButton, 
+import {
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarMenu,
+  SidebarMenuButton,
   SidebarMenuItem
 } from "@/components/ui/sidebar";
 
@@ -20,21 +19,18 @@ const items = [
     icon: HomeIcon,
   },
   {
-    title: "Subscribed",
-    url: "/feed/subscribed",
+    title: "Documents",
+    url: "/documents",
     icon: PlaySquareIcon,
-    auth: true,
   },
   {
-    title: "Trending",
-    url: "/feed/trending",
+    title: "Templates",
+    url: "/templates",
     icon: FlameIcon,
   },
 ];
 
 export const MainSection = () => {
-  const clerk = useClerk();
-  const { isSignedIn } = useAuth();
   const pathname = usePathname();
 
   return (
@@ -47,12 +43,6 @@ export const MainSection = () => {
                 tooltip={item.title}
                 asChild
                 isActive={pathname === item.url}
-                onClick={(e) => {
-                  if (!isSignedIn && item.auth) {
-                    e.preventDefault();
-                    return clerk.openSignIn();
-                  }
-                }}
               >
                 <Link prefetch href={item.url} className="flex items-center gap-4">
                   <item.icon />
