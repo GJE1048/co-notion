@@ -28,7 +28,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     data: blocksData,
     isLoading: blocksLoading,
     error: blocksError
-  } = trpc.devGetDocumentBlocks.useQuery({
+  } = trpc.dev.devGetDocumentBlocks.useQuery({
     documentId: initialDocument.id
   });
 

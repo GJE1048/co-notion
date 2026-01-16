@@ -12,7 +12,7 @@ export const DocumentsView = () => {
     data: documents,
     isLoading,
     error
-  } = trpc.devGetUserDocuments.useQuery();
+  } = trpc.dev.devGetUserDocuments.useQuery();
 
   const createDocumentMutation = trpc.documents.createDocument.useMutation({
     onSuccess: (newDocument) => {
