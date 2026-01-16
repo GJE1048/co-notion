@@ -51,8 +51,7 @@ export async function POST(request: NextRequest) {
       .insert(documents)
       .values({
         title: title.trim(),
-        content: "",
-        userId: user.id,
+        ownerId: user.id,
       })
       .returning();
 
@@ -95,7 +94,7 @@ export async function GET(request: NextRequest) {
     const userDocuments = await db
       .select()
       .from(documents)
-      .where(eq(documents.userId, user.id))
+      .where(eq(documents.ownerId, user.id))
       .orderBy(documents.updatedAt);
 
     return NextResponse.json({ documents: userDocuments });

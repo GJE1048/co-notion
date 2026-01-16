@@ -17,6 +17,7 @@
     "db:update-users": "psql $DATABASE_URL -f scripts/update-users-table.sql",
     "db:fix": "psql $DATABASE_URL -f scripts/fix-users-table.sql",
     "db:setup": "tsx scripts/setup-db.ts",
+    "db:add-blocks": "tsx scripts/setup-db.ts add-blocks-system.sql",
     "test:user-sync": "tsx scripts/test-user-sync.ts",
     "test:db-write": "tsx scripts/test-db-write.ts",
     "test:db-basic": "tsx scripts/test-db-basic.ts",

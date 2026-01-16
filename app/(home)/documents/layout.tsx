@@ -5,8 +5,8 @@ interface DocumentsLayoutProps {
   children: React.ReactNode;
 }
 
-const DocumentsLayout = ({ children }: DocumentsLayoutProps) => {
-  const { userId } = auth();
+const DocumentsLayout = async ({ children }: DocumentsLayoutProps) => {
+  const { userId } = await auth();
 
   if (!userId) {
     redirect("/");

@@ -15,16 +15,27 @@ export const createTRPCContext = cache(async()=>{
 
 export type Context = Awaited<ReturnType<typeof createTRPCContext>>
 
+export type ProtectedContext = Context & {
+  user: {
+    id: string;
+    username: string;
+    clerkId: string;
+    imageUrl: string;
+    createdAt: Date;
+    updatedAt: Date;
+  };
+}
+
 // Avoid exporting the entire t-object
 // since it's not very descriptive.
 // For instance, the use of a t variable
 // is common in i18n libraries.
 
 const t = initTRPC.context<Context>().create({
-    /**
-     * @see https://trpc.io/docs/server/data-transformers
-     */
-    transformer: superjson,
+  /**
+   * @see https://trpc.io/docs/server/data-transformers
+   */
+  transformer: superjson,
 });
 //Base router and procedure helpers
 export const createTRPCRouter = t.router;
@@ -50,13 +61,13 @@ export const protectedProcedure = t.procedure.use(async function isAuth(opts) {
 
     if(!success){
         throw new TRPCError({code : "BAD_REQUEST"})
-
     }
+
     return opts.next({
         ctx:{
             ...ctx,
             user
-        }
+        } as ProtectedContext
     })
 })
 

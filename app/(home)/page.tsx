@@ -78,7 +78,7 @@ interface PageProps {
             recentDocs = await db
               .select()
               .from(documents)
-              .where(eq(documents.userId, user.id))
+              .where(eq(documents.ownerId, user.id))
               .orderBy(desc(documents.updatedAt))
               .limit(5);
           } catch (docsError) {
