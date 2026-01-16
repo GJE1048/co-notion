@@ -3,7 +3,7 @@ import { z } from "zod";
 
 export const devRouter = createTRPCRouter({
   // 开发模式 - 绕过认证获取文档（ngrok 环境下使用）
-  devGetUserDocuments: baseProcedure.query(async () => {
+  getUserDocuments: baseProcedure.query(async () => {
     const { db } = await import("@/db");
     const { documents, users, workspaces } = await import("@/db/schema");
     const { eq, desc } = await import("drizzle-orm");
@@ -35,7 +35,7 @@ export const devRouter = createTRPCRouter({
   }),
 
   // 开发模式 - 绕过认证获取单个文档
-  devGetDocument: baseProcedure
+  getDocument: baseProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ input }) => {
       const { db } = await import("@/db");
@@ -71,7 +71,7 @@ export const devRouter = createTRPCRouter({
     }),
 
   // 开发模式 - 绕过认证获取文档 blocks
-  devGetDocumentBlocks: baseProcedure
+  getDocumentBlocks: baseProcedure
     .input(z.object({ documentId: z.string() }))
     .query(async ({ input }) => {
       const { db } = await import("@/db");

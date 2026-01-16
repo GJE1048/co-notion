@@ -14,7 +14,7 @@ export const DocumentView = ({ documentId }: DocumentViewProps) => {
     data: document,
     isLoading: documentLoading,
     error: documentError
-  } = trpc.dev.devGetDocument.useQuery({ id: documentId });
+  } = trpc.dev.getDocument.useQuery({ id: documentId });
 
   if (documentError) {
     if (documentError.data?.code === "NOT_FOUND") {
