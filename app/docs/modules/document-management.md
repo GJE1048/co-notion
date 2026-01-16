@@ -1,47 +1,170 @@
-# 可视化文档管理模块
+# 基于 Block 结构的文档管理系统
 
 ## 概述
 
-可视化文档管理模块提供强大的文档组织和管理功能，支持多级文件夹、标签分类、回收站等功能，并提供文档关系图谱视图，直观展示文档间的引用或协作关联。
+本系统采用类似 Notion 的设计理念，实现基于 Block（块）结构的文档管理系统。通过操作日志（OpLog）+ Block 树 + 定期快照的方式，实现高效的实时协同编辑、版本控制和历史回溯。支持 AI 内容块无缝集成，提供丰富的文档编辑体验。
 
-## 核心功能
+## 核心设计理念
 
-### 1. 文件夹管理
+### 1. Block 结构设计
 
-**多级文件夹结构**:
+**Block（块）概念**：
+Block 是文档的最小组成单位，每个 Block 都有唯一的 ID、类型和内容。整个文档是一个 Block 树结构，支持嵌套和层级关系。
+
+**Block 类型**：
 ```typescript
-interface Folder {
+type BlockType =
+  | 'page'           // 页面根节点
+  | 'heading_1'      // 一级标题
+  | 'heading_2'      // 二级标题
+  | 'heading_3'      // 三级标题
+  | 'paragraph'      // 段落
+  | 'code'           // 代码块
+  | 'quote'          // 引用
+  | 'list'           // 列表
+  | 'todo'           // 待办事项
+  | 'divider'        // 分割线
+  | 'image'          // 图片
+  | 'video'          // 视频
+  | 'file'           // 文件
+  | 'ai_generated'   // AI 生成内容
+  | 'database'       // 数据库视图
+  | 'table'          // 表格
+  | 'kanban'         // 看板
+  | 'calendar';      // 日历
+```
+
+**Block 数据结构**：
+```typescript
+interface Block {
   id: string;
-  name: string;
-  parentId?: string;
-  children: Folder[];
-  documents: Document[];
-  permissions: Permission[];
-  metadata: {
-    createdAt: Date;
-    updatedAt: Date;
-    createdBy: string;
+  type: BlockType;
+  parentId?: string;        // 父 Block ID，用于构建树结构
+  children: string[];       // 子 Block ID 列表
+  content: BlockContent;    // 具体内容，根据类型不同
+  properties: Record<string, any>; // 额外属性
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy: string;
+  version: number;
+}
+
+interface BlockContent {
+  // 文本类 Block
+  text?: {
+    content: string;
+    annotations: TextAnnotation[];
+  };
+
+  // 媒体类 Block
+  file?: {
+    url: string;
+    name: string;
+    size: number;
+    mimeType: string;
+  };
+
+  // AI 生成内容
+  aiGenerated?: {
+    prompt: string;
+    model: string;
+    response: string;
+    metadata: Record<string, any>;
+  };
+
+  // 数据库/表格内容
+  database?: {
+    schema: DatabaseSchema;
+    records: DatabaseRecord[];
   };
 }
 ```
 
-**文件夹操作**:
-- 创建/删除文件夹
-- 重命名文件夹
-- 移动文件夹
-- 复制文件夹
-- 权限设置
+## 核心功能
 
-### 2. 标签系统
+### 1. 操作日志（OpLog）同步
 
-**标签设计**:
+**操作类型定义**：
+```typescript
+type OperationType =
+  | 'create_block'      // 创建 Block
+  | 'update_block'      // 更新 Block 内容/属性
+  | 'delete_block'      // 删除 Block
+  | 'move_block'        // 移动 Block 位置
+  | 'update_children';  // 更新子 Block 顺序
+
+interface Operation {
+  id: string;
+  documentId: string;
+  blockId: string;
+  type: OperationType;
+  payload: Record<string, any>;  // 操作的具体数据
+  clientId: string;              // 操作发起者
+  timestamp: Date;
+  version: number;               // 文档版本号
+}
+```
+
+**同步机制**：
+- **本地编辑**：用户操作立即反映到本地状态
+- **增量同步**：只发送操作指令，不传输全文内容
+- **冲突解决**：基于时间戳和业务规则自动合并冲突
+- **离线支持**：本地缓存，支持离线编辑后上线同步
+
+### 2. 快照机制
+
+**定期快照**：
+- 每 5 分钟自动创建文档快照
+- 手动创建重要版本快照
+- 快照包含完整的 Block 树状态
+- 支持快速加载和历史回溯
+
+**快照数据结构**：
+```typescript
+interface DocumentSnapshot {
+  id: string;
+  documentId: string;
+  version: number;
+  blocks: Block[];           // 完整的 Block 树
+  operations: Operation[];   // 从上次快照到现在的操作日志
+  createdAt: Date;
+  metadata: {
+    reason: 'auto' | 'manual' | 'backup';
+    size: number;
+    blockCount: number;
+  };
+}
+```
+
+### 3. 实时协同编辑
+
+**协同状态管理**：
+- 使用 Yjs 或类似 CRDT 库管理本地状态
+- WebSocket 连接实现实时同步
+- 用户光标位置共享
+- 操作冲突自动解决
+
+**协作状态指示**：
+- 在线用户列表
+- 用户光标位置显示
+- 编辑冲突提示
+- 实时通知机制
+
+### 4. 文档组织与导航
+
+**工作区结构**：
+- 支持多级文件夹组织
+- 文档可以作为其他文档的子页面
+- 灵活的导航树结构
+
+**标签与分类**：
 ```typescript
 interface Tag {
   id: string;
   name: string;
   color: string;
   category?: string;
-  usage: number; // 使用次数
+  usage: number;
 }
 
 interface DocumentTag {
@@ -52,11 +175,11 @@ interface DocumentTag {
 }
 ```
 
-**标签功能**:
-- 创建自定义标签
-- 标签分类管理
-- 智能标签建议
-- 标签统计分析
+**组织功能**：
+- 智能文件夹管理
+- 标签自动分类
+- 文档模板系统
+- 快速搜索和过滤
 
 ### 3. 文档关系图谱
 
@@ -84,63 +207,111 @@ interface RelationEdge {
 }
 ```
 
-## 用户界面设计
+## 前端架构设计
 
-### 侧边栏导航
+### Block 编辑器组件
 
-**导航结构**:
+**核心组件结构**：
+```typescript
+// Block 编辑器主组件
+interface BlockEditorProps {
+  documentId: string;
+  initialBlocks: Block[];
+  onBlockChange: (blockId: string, changes: Partial<Block>) => void;
+  onBlockCreate: (block: Omit<Block, 'id'>) => void;
+  onBlockDelete: (blockId: string) => void;
+}
+
+// 单个 Block 组件
+interface BlockComponentProps {
+  block: Block;
+  isSelected: boolean;
+  isEditing: boolean;
+  collaborators: Collaborator[];
+  onUpdate: (updates: Partial<Block>) => void;
+  onSelect: () => void;
+  onDelete: () => void;
+}
 ```
-📁 我的文档
-  📄 最近编辑
-  📁 项目A
-    📄 需求文档.md
-    📄 设计文档.md
-    📁 子项目
-  📁 项目B
+
+**Block 类型组件**：
+- **文本 Block**：支持富文本编辑、格式化
+- **媒体 Block**：图片、视频、文件上传
+- **列表 Block**：有序/无序列表、任务列表
+- **代码 Block**：语法高亮、多语言支持
+- **表格 Block**：可编辑表格、数据库视图
+- **AI Block**：AI 生成内容、交互式编辑
+
+### 协同编辑界面
+
+**实时协作指示器**：
+```typescript
+interface CollaborationIndicatorProps {
+  users: Array<{
+    id: string;
+    name: string;
+    avatar: string;
+    cursor: { blockId: string; offset: number };
+    color: string;
+  }>;
+  documentId: string;
+}
+```
+
+**编辑状态显示**：
+- 用户光标位置实时显示
+- 编辑冲突提示
+- 离线状态指示
+- 保存状态反馈
+
+### 导航与组织界面
+
+**侧边栏导航**：
+```
+📄 工作区
+  📄 最近文档
+  📁 私有文档
+    📄 项目计划
+    📄 会议记录
+  📁 团队文档
+    📄 API 文档
+    📄 用户手册
   🏷️ 标签
-    🏷️ 重要
-    🏷️ 待办
-    🏷️ 归档
-  🗂️ 回收站
+    🏷️ 🚀 紧急
+    🏷️ 📋 待办
+  📝 模板
+    📝 会议纪要
+    📝 项目报告
 ```
 
-### 文档列表视图
+**文档列表视图**：
+- 支持多种布局：列表、网格、卡片
+- 实时协作状态显示
+- 快速操作：重命名、移动、删除
+- 智能排序和过滤
 
-**列表显示**:
-- 文档标题
-- 最后修改时间
-- 修改者头像
-- 标签显示
-- 协作状态
+### Block 编辑交互
 
-**排序选项**:
-- 按名称排序
-- 按修改时间排序
-- 按创建时间排序
-- 按文件大小排序
+**键盘快捷键**：
+- `Enter`: 创建新 Block 或换行
+- `Tab`: 缩进 Block（创建子 Block）
+- `Shift+Tab`: 减少缩进
+- `Cmd/Ctrl+B`: 粗体
+- `Cmd/Ctrl+I`: 斜体
+- `Cmd/Ctrl+K`: 链接
+- `/`: 快速创建 Block（Slash 命令）
 
-### 关系图谱视图
+**拖拽操作**：
+- Block 拖拽重新排序
+- 跨文档 Block 引用
+- 文件拖拽上传
+- 模板拖拽应用
 
-**可视化界面**:
-```
-┌─────────────────────────────────────────────────┐
-│                    关系图谱视图                    │
-├─────────────────────────────────────────────────┤
-│                                                 │
-│     [文档A] ────── 引用 ─────> [文档B]         │
-│        │                                       │
-│        └────── 协作 ────── [用户1]             │
-│                                                 │
-│     [文档C] ◇───────── 相似 ────────◇ [文档D] │
-│                                                 │
-└─────────────────────────────────────────────────┘
-```
-
-**交互功能**:
-- 节点拖拽
-- 关系查看
-- 路径高亮
-- 筛选过滤
+**右键菜单**：
+- 复制/粘贴 Block
+- 转换为其他类型
+- 添加评论
+- 查看历史版本
 
 ## 搜索功能
 
@@ -216,37 +387,83 @@ interface DeletedItem {
 - 用户确认机制
 - 批量清理功能
 
-## 版本控制
+## 数据库设计
 
-### 版本管理
+### 核心表结构
 
-**版本记录**:
-```typescript
-interface DocumentVersion {
-  id: string;
-  documentId: string;
-  version: number;
-  content: string;
-  createdAt: Date;
-  createdBy: string;
-  changeSummary: string;
-  size: number;
-}
+**1. 文档表（Documents）**：
+```sql
+CREATE TABLE documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  owner_id UUID REFERENCES users(id),
+  workspace_id UUID REFERENCES workspaces(id),
+  is_template BOOLEAN DEFAULT FALSE,
+  is_archived BOOLEAN DEFAULT FALSE,
+  permissions JSONB DEFAULT '{"public": false, "team": true}',
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 ```
 
-**版本操作**:
-- 查看版本历史
-- 版本对比
-- 恢复到指定版本
-- 创建版本快照
+**2. Block 表（核心）**：
+```sql
+CREATE TABLE blocks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id UUID REFERENCES documents(id) ON DELETE CASCADE,
+  parent_id UUID REFERENCES blocks(id),  -- 父 Block，支持树结构
+  type TEXT NOT NULL,                    -- Block 类型
+  content JSONB NOT NULL DEFAULT '{}',   -- Block 内容
+  properties JSONB DEFAULT '{}',         -- 额外属性
+  position INTEGER DEFAULT 0,            -- 在父 Block 中的位置
+  version INTEGER DEFAULT 1,             -- Block 版本号
+  created_by UUID REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 
-### 自动保存
+-- 为树结构查询优化
+CREATE INDEX idx_blocks_document_parent ON blocks(document_id, parent_id);
+CREATE INDEX idx_blocks_position ON blocks(parent_id, position);
+```
 
-**保存机制**:
-- 实时自动保存
-- 本地草稿保存
-- 冲突检测与解决
-- 保存状态指示
+**3. 操作日志表（Operations）**：
+```sql
+CREATE TABLE operations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id UUID REFERENCES documents(id) ON DELETE CASCADE,
+  block_id UUID REFERENCES blocks(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,                    -- 操作类型
+  payload JSONB NOT NULL,                -- 操作数据
+  client_id TEXT NOT NULL,               -- 操作客户端标识
+  user_id UUID REFERENCES users(id),
+  version INTEGER NOT NULL,              -- 文档版本号
+  timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 为同步查询优化
+CREATE INDEX idx_operations_document_version ON operations(document_id, version DESC);
+CREATE INDEX idx_operations_timestamp ON operations(document_id, timestamp DESC);
+```
+
+**4. 快照表（Snapshots）**：
+```sql
+CREATE TABLE document_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id UUID REFERENCES documents(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  blocks_snapshot JSONB NOT NULL,        -- 完整的 Block 树快照
+  operations_since_last JSONB DEFAULT '[]', -- 从上次快照到现在的操作
+  reason TEXT DEFAULT 'auto',            -- 快照原因：auto/manual/backup
+  size_bytes INTEGER,                    -- 快照大小
+  block_count INTEGER,                   -- Block 数量
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 为历史查询优化
+CREATE INDEX idx_snapshots_document_version ON document_snapshots(document_id, version DESC);
+```
 
 ## 权限管理
 
@@ -275,53 +492,130 @@ interface DocumentVersion {
 
 ## API 接口设计
 
-### 文件夹管理 API
-
-```typescript
-// 创建文件夹
-POST /api/folders
-{
-  "name": "新文件夹",
-  "parentId": "parent-folder-id"
-}
-
-// 获取文件夹内容
-GET /api/folders/:id/contents
-
-// 移动文件夹
-PUT /api/folders/:id/move
-{
-  "newParentId": "new-parent-id"
-}
-```
-
 ### 文档管理 API
 
 ```typescript
-// 获取文档列表
-GET /api/documents?folder=:folderId&tag=:tagId
+// 获取文档基本信息
+GET /api/documents/:id
 
-// 搜索文档
-GET /api/documents/search?q=:query
-
-// 更新文档标签
-PUT /api/documents/:id/tags
+// 创建新文档
+POST /api/documents
 {
-  "tags": ["重要", "项目A"]
+  "title": "新文档",
+  "workspaceId": "workspace-id",
+  "templateId": "template-id"  // 可选
+}
+
+// 更新文档元信息
+PATCH /api/documents/:id
+{
+  "title": "新标题",
+  "isArchived": false,
+  "permissions": {...}
 }
 ```
 
-### 关系图谱 API
+### Block 操作 API
 
 ```typescript
-// 获取文档关系
-GET /api/documents/:id/relations
+// 获取文档的完整 Block 树
+GET /api/documents/:id/blocks
 
-// 创建文档引用
-POST /api/documents/:id/references
+// 创建新 Block
+POST /api/documents/:id/blocks
 {
-  "targetId": "referenced-document-id",
-  "type": "reference"
+  "type": "paragraph",
+  "parentId": "parent-block-id",
+  "content": {"text": {"content": "Hello World"}},
+  "position": 0
+}
+
+// 更新 Block
+PATCH /api/blocks/:blockId
+{
+  "content": {"text": {"content": "Updated content"}},
+  "properties": {"bold": true}
+}
+
+// 删除 Block
+DELETE /api/blocks/:blockId
+
+// 移动 Block
+PUT /api/blocks/:blockId/move
+{
+  "newParentId": "new-parent-id",
+  "newPosition": 1
+}
+```
+
+### 协同同步 API
+
+```typescript
+// WebSocket 连接用于实时同步
+WebSocket: /api/documents/:id/sync
+
+// 批量提交操作
+POST /api/documents/:id/operations
+{
+  "operations": [
+    {
+      "blockId": "block-1",
+      "type": "update_block",
+      "payload": {"content": "new content"},
+      "version": 42
+    }
+  ]
+}
+
+// 获取最新操作
+GET /api/documents/:id/operations?since=:version
+
+// 获取文档当前状态
+GET /api/documents/:id/state
+```
+
+### 版本管理 API
+
+```typescript
+// 获取版本历史
+GET /api/documents/:id/versions
+
+// 获取特定版本快照
+GET /api/documents/:id/versions/:version
+
+// 恢复到指定版本
+POST /api/documents/:id/restore
+{
+  "version": 42,
+  "createSnapshot": true
+}
+
+// 创建手动快照
+POST /api/documents/:id/snapshot
+{
+  "reason": "manual",
+  "description": "重要版本"
+}
+```
+
+### 搜索 API
+
+```typescript
+// 全文搜索
+GET /api/search?q=keyword&type=blocks
+
+// Block 内搜索
+GET /api/documents/:id/search?q=keyword
+
+// 高级搜索
+POST /api/search/advanced
+{
+  "query": "machine learning",
+  "filters": {
+    "types": ["paragraph", "heading"],
+    "authors": ["user-1", "user-2"],
+    "dateRange": {"start": "2024-01-01", "end": "2024-12-31"}
+  }
 }
 ```
 
@@ -369,27 +663,190 @@ POST /api/documents/:id/references
 - 缓存命中率
 - 存储操作延迟
 
+## AI 集成设计
+
+### AI Block 类型
+
+**AI 生成内容 Block**：
+```typescript
+interface AIContentBlock extends Block {
+  type: 'ai_generated';
+  content: {
+    aiGenerated: {
+      prompt: string;
+      model: string;           // 'gpt-4', 'claude', etc.
+      response: string;
+      tokens: number;
+      generationTime: number;
+      metadata: {
+        temperature?: number;
+        maxTokens?: number;
+        modelVersion?: string;
+      };
+    };
+  };
+}
+```
+
+**AI 交互功能**：
+- **智能续写**：基于上下文自动生成内容
+- **内容改写**：优化现有内容的表达
+- **翻译**：多语言翻译支持
+- **摘要生成**：自动生成文档摘要
+- **问答**：基于文档内容回答问题
+
+### AI 增强编辑
+
+**智能建议**：
+- 文本纠错和语法检查
+- 写作风格优化建议
+- 内容结构化建议
+- 相关内容推荐
+
+**自动化工作流**：
+- 会议记录自动整理
+- 代码注释自动生成
+- 文档模板智能填充
+- 重复内容检测和合并
+
+### AI 数据管理
+
+**AI 生成追踪**：
+```typescript
+interface AIGenerationRecord {
+  id: string;
+  documentId: string;
+  blockId: string;
+  prompt: string;
+  response: string;
+  model: string;
+  tokensUsed: number;
+  cost: number;              // API 调用费用
+  quality: number;           // 用户评价 1-5
+  timestamp: Date;
+}
+```
+
+**AI 性能监控**：
+- 响应时间统计
+- 生成质量评估
+- 用户满意度分析
+- 成本效益分析
+
+## 性能优化
+
+### Block 级缓存策略
+
+**多层缓存架构**：
+```typescript
+interface CacheLayers {
+  // L1: 内存缓存（当前编辑的文档）
+  memory: Map<string, Block[]>;
+
+  // L2: IndexedDB（离线文档）
+  indexedDB: IDBDatabase;
+
+  // L3: Redis（热门文档）
+  redis: RedisClient;
+
+  // L4: 数据库查询缓存
+  database: QueryCache;
+}
+```
+
+**智能预加载**：
+- 预测用户访问模式
+- 预加载相关 Block
+- 渐进式内容加载
+- 按需加载媒体内容
+
+### 协同编辑优化
+
+**操作批处理**：
+- 批量提交操作减少网络请求
+- 操作压缩和去重
+- 智能合并连续操作
+- 延迟同步优化
+
+**冲突解决算法**：
+```typescript
+// 基于时间戳和操作类型的冲突解决
+function resolveConflict(localOp: Operation, remoteOp: Operation): Operation {
+  // 1. 时间戳比较
+  if (localOp.timestamp > remoteOp.timestamp) return localOp;
+
+  // 2. 操作类型优先级
+  const priority = {
+    'delete_block': 1,
+    'update_block': 2,
+    'create_block': 3,
+    'move_block': 4
+  };
+
+  // 3. 业务规则处理
+  // ...
+}
+```
+
 ## 扩展性设计
 
 ### 插件系统
 
-**插件接口**:
+**Block 插件接口**：
 ```typescript
-interface DocumentPlugin {
+interface BlockPlugin {
+  type: string;              // 插件支持的 Block 类型
   name: string;
   version: string;
-  hooks: {
-    onDocumentCreate?: (document: Document) => void;
-    onDocumentUpdate?: (document: Document) => void;
-    onSearch?: (query: string) => SearchResult[];
+
+  // 渲染组件
+  render: (block: Block, props: BlockProps) => ReactElement;
+
+  // 编辑器组件
+  editor: (block: Block, onChange: (block: Block) => void) => ReactElement;
+
+  // 操作处理
+  operations: {
+    create?: (data: any) => Partial<Block>;
+    update?: (block: Block, data: any) => Partial<Block>;
+    validate?: (block: Block) => ValidationResult;
+  };
+
+  // 导出支持
+  exporters: {
+    markdown?: (block: Block) => string;
+    html?: (block: Block) => string;
+    pdf?: (block: Block) => Buffer;
   };
 }
 ```
 
 ### 第三方集成
 
-**集成支持**:
-- 云存储服务 (Google Drive, OneDrive)
-- 项目管理工具 (Jira, Trello)
-- 版本控制系统 (Git)
-- 知识库系统 (Confluence, Notion)
+**集成框架**：
+```typescript
+interface IntegrationProvider {
+  name: string;
+  type: 'storage' | 'collaboration' | 'ai' | 'export';
+
+  // 认证配置
+  auth: {
+    oauth?: OAuthConfig;
+    apiKey?: APIKeyConfig;
+  };
+
+  // 功能接口
+  api: {
+    import?: (source: string) => Promise<Block[]>;
+    export?: (blocks: Block[]) => Promise<string>;
+    sync?: (documentId: string) => Promise<void>;
+  };
+}
+```
+
+**支持的集成类型**：
+- **云存储**：Google Drive, OneDrive, Dropbox
+- **协同工具**：Slack, Microsoft Teams, Figma
+- **项目管理**：Jira, Trello, Asana
+- **版本控制**：Git, GitHub, GitLab
+- **知识库**：Confluence, Notion, Roam Research

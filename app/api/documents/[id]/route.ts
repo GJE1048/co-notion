@@ -45,7 +45,7 @@ export async function GET(
     }
 
     // 验证文档所有权
-    if (document.userId !== user.id) {
+    if (document.ownerId !== user.id) {
       return NextResponse.json(
         { error: "无权访问此文档" },
         { status: 403 }
@@ -105,7 +105,7 @@ export async function PATCH(
     }
 
     // 验证文档所有权
-    if (document.userId !== user.id) {
+    if (document.ownerId !== user.id) {
       return NextResponse.json(
         { error: "无权编辑此文档" },
         { status: 403 }
@@ -117,7 +117,6 @@ export async function PATCH(
       .update(documents)
       .set({
         title: title !== undefined ? title.trim() : document.title,
-        content: content !== undefined ? content : document.content,
         updatedAt: new Date(),
       })
       .where(eq(documents.id, id))
@@ -174,7 +173,7 @@ export async function DELETE(
     }
 
     // 验证文档所有权
-    if (document.userId !== user.id) {
+    if (document.ownerId !== user.id) {
       return NextResponse.json(
         { error: "无权删除此文档" },
         { status: 403 }

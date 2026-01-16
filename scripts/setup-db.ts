@@ -51,79 +51,113 @@ async function setupDatabase() {
     await pool.query("SELECT 1");
     console.log("✅ 数据库连接成功\n");
 
-    // 检查表是否存在
-    const tables = await pool.query(`
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-      AND table_type = 'BASE TABLE'
-      ORDER BY table_name;
-    `);
+    // 检查命令行参数
+    const sqlFile = process.argv[2];
 
-    console.log(`当前数据库中的表 (${tables.rows.length} 个):`);
-    if (tables.rows.length === 0) {
-      console.log("  (无表)");
+    if (sqlFile) {
+      // 运行指定的 SQL 文件
+      const sqlPath = path.join(process.cwd(), "scripts", sqlFile);
+      if (!fs.existsSync(sqlPath)) {
+        console.error(`❌ SQL 文件不存在: ${sqlPath}`);
+        process.exit(1);
+      }
+
+      console.log(`📄 运行 SQL 文件: ${sqlFile}`);
+      const sqlContent = fs.readFileSync(sqlPath, 'utf-8');
+
+      // 分割 SQL 语句并执行
+      const statements = sqlContent.split(';').filter(stmt => stmt.trim().length > 0);
+
+      for (const statement of statements) {
+        if (statement.trim()) {
+          try {
+            await pool.query(statement);
+          } catch (error) {
+            console.log(`⚠️  SQL 语句执行警告: ${error}`);
+            // 继续执行，不中断
+          }
+        }
+      }
+
+      console.log("✅ SQL 文件执行完成\n");
     } else {
-      tables.rows.forEach((row: any) => {
-        console.log(`  - ${row.table_name}`);
-      });
+      // 原有的数据库设置逻辑
+      console.log("🔧 执行标准数据库设置...");
+
+      // 检查表是否存在
+      const tables = await pool.query(`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_type = 'BASE TABLE'
+        ORDER BY table_name;
+      `);
+
+      console.log(`当前数据库中的表 (${tables.rows.length} 个):`);
+      if (tables.rows.length === 0) {
+        console.log("  (无表)");
+      } else {
+        tables.rows.forEach((row: any) => {
+          console.log(`  - ${row.table_name}`);
+        });
+      }
+
+      // 创建表
+      console.log("\n开始创建表...");
+
+      // 创建 users 表
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          username TEXT NOT NULL UNIQUE,
+          clerk_id TEXT NOT NULL UNIQUE,
+          image_url TEXT NOT NULL DEFAULT 'https://ui-avatars.com/api/?name=John+Doe',
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+      `);
+      console.log("✅ users 表已创建/已存在");
+
+      // 创建索引
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS clerk_id_idx ON users(clerk_id);
+      `);
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS username_idx ON users(username);
+      `);
+      console.log("✅ users 表索引已创建");
+
+      // 创建 documents 表
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS documents (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          title TEXT NOT NULL,
+          content TEXT NOT NULL DEFAULT '',
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+      `);
+      console.log("✅ documents 表已创建/已存在");
+
+      // 创建外键约束
+      await pool.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'fk_documents_user_id'
+          ) THEN
+            ALTER TABLE documents
+            ADD CONSTRAINT fk_documents_user_id
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+          END IF;
+        END $$;
+      `);
+      console.log("✅ documents 表外键已创建");
     }
 
-    // 创建表
-    console.log("\n开始创建表...");
-
-    // 创建 users 表
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        username TEXT NOT NULL UNIQUE,
-        clerk_id TEXT NOT NULL UNIQUE,
-        image_url TEXT NOT NULL DEFAULT 'https://ui-avatars.com/api/?name=John+Doe',
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
-    console.log("✅ users 表已创建/已存在");
-
-    // 创建索引
-    await pool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS clerk_id_idx ON users(clerk_id);
-    `);
-    await pool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS username_idx ON users(username);
-    `);
-    console.log("✅ users 表索引已创建");
-
-    // 创建 documents 表
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS documents (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        title TEXT NOT NULL,
-        content TEXT NOT NULL DEFAULT '',
-        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
-    console.log("✅ documents 表已创建/已存在");
-
-    // 创建外键约束
-    await pool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint
-          WHERE conname = 'fk_documents_user_id'
-        ) THEN
-          ALTER TABLE documents
-          ADD CONSTRAINT fk_documents_user_id
-          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
-        END IF;
-      END $$;
-    `);
-    console.log("✅ documents 表外键已创建");
-
-    // 再次检查表
+    // 最终检查表
     const finalTables = await pool.query(`
       SELECT table_name
       FROM information_schema.tables
@@ -138,12 +172,16 @@ async function setupDatabase() {
       console.log(`  - ${row.table_name}`);
     });
 
-    // 检查数据
-    const userCount = await pool.query("SELECT COUNT(*) FROM users");
-    const docCount = await pool.query("SELECT COUNT(*) FROM documents");
-    console.log(`\n数据统计:`);
-    console.log(`  - 用户数: ${userCount.rows[0].count}`);
-    console.log(`  - 文档数: ${docCount.rows[0].count}`);
+    // 检查数据（如果表存在）
+    try {
+      const userCount = await pool.query("SELECT COUNT(*) FROM users");
+      const docCount = await pool.query("SELECT COUNT(*) FROM documents");
+      console.log(`\n数据统计:`);
+      console.log(`  - 用户数: ${userCount.rows[0].count}`);
+      console.log(`  - 文档数: ${docCount.rows[0].count}`);
+    } catch (error) {
+      console.log(`\n数据统计: 部分表可能不存在`);
+    }
 
   } catch (error) {
     console.error("\n❌ 错误:", error);
