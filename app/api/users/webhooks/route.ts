@@ -28,14 +28,14 @@ export async function POST(req:Request) {
     }
 
     //Get body
-    const payload = await req.json()
-    const body = JSON.stringify(payload);
+    // const payload = await req.json()
+    // const body = JSON.stringify(payload);
 
     let evt : WebhookEvent
 
     //Verify payload with headers
     try{
-        evt = wh.verify(body,{
+        evt = wh.verify(await req.text(),{
             'svix-id': svix_id,
             'svix-timestamp': svix_timestamp,
             'svix-signature': svix_signature,

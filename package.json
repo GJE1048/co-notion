@@ -17,6 +17,14 @@
     "db:update-users": "psql $DATABASE_URL -f scripts/update-users-table.sql",
     "db:fix": "psql $DATABASE_URL -f scripts/fix-users-table.sql",
     "db:setup": "tsx scripts/setup-db.ts",
+    "test:user-sync": "tsx scripts/test-user-sync.ts",
+    "test:db-write": "tsx scripts/test-db-write.ts",
+    "test:db-basic": "tsx scripts/test-db-basic.ts",
+    "test:db-diagnose": "tsx scripts/diagnose-db.ts",
+    "debug:env": "tsx scripts/debug-env.ts",
+    "test:psql": "tsx scripts/test-psql.ts",
+    "test:connection": "tsx scripts/test-connection.ts",
+    "test:compare": "tsx scripts/compare-connections.ts",
     "clear:clerk": "node scripts/clear-clerk-session.js"
   },
   "dependencies": {

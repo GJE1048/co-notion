@@ -1,5 +1,44 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## 最新更新：Clerk 用户自动创建功能
+
+### 问题解决
+
+如果遇到 "Database connection error: Failed query" 错误，这是因为 Clerk 用户登录后在数据库中没有对应记录。
+
+**解决方案已实现：**
+- ✅ 修改了 `app/(home)/documents/page.tsx` 页面，在找不到用户时自动创建
+- ✅ 创建了 `lib/user-sync.ts` 工具函数，提供通用的用户同步功能
+- ✅ 自动处理用户名冲突，避免数据库错误
+
+### 功能特点
+
+- 🔄 **自动用户创建**：Clerk 登录时自动在数据库创建用户记录
+- 🛡️ **冲突处理**：用户名重复时自动添加随机后缀
+- 🎯 **统一接口**：提供 `getCurrentUser()` 函数供其他页面使用
+- 📝 **错误日志**：详细记录用户创建过程
+
+## 环境配置
+
+1. 创建 `.env.local` 文件：
+```env
+# 数据库配置
+DATABASE_URL="postgresql://username:password@localhost:5432/your_database"
+
+# Clerk 认证配置
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_..."
+CLERK_SECRET_KEY="sk_test_..."
+CLERK_SIGNING_SECRET="whsec_..."
+
+# Redis 配置 (可选)
+REDIS_URL="redis://localhost:6379"
+```
+
+2. 设置数据库：
+```bash
+npm run db:push  # 推送 schema 到数据库
+```
+
 ## Getting Started
 
 First, run the development server:
