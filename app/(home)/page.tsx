@@ -120,7 +120,7 @@ interface PageProps {
 
             {/* 右侧边栏 */}
             <div className="space-y-8">
-              <WorkspaceOverview userId={userDoc?.id} />
+              <WorkspaceOverview />
             </div>
           </div>
         </div>

@@ -45,6 +45,7 @@ export const blocksRouter = createTRPCRouter({
   updateBlock: protectedProcedure
     .input(z.object({
       id: z.string(),
+      clientId: z.string().optional(),
       data: z.object({
         type: z.enum([
           'page', 'heading_1', 'heading_2', 'heading_3',
@@ -85,15 +86,34 @@ export const blocksRouter = createTRPCRouter({
         .where(eq(blocks.id, input.id))
         .returning();
 
-      // TODO: 记录操作日志
-      // await recordOperation(block.document.id, 'update_block', input.data, ctx.user.id);
+      const [lastOperation] = await db
+        .select({ version: operations.version })
+        .from(operations)
+        .where(eq(operations.documentId, block.document.id))
+        .orderBy(desc(operations.version))
+        .limit(1);
+
+      const nextVersion = lastOperation ? lastOperation.version + 1 : 1;
+
+      await db.insert(operations).values({
+        documentId: block.document.id,
+        blockId: updatedBlock.id,
+        type: "update_block",
+        payload: input.data as Record<string, unknown>,
+        clientId: input.clientId ?? ctx.user.id,
+        userId: ctx.user.id,
+        version: nextVersion,
+      });
 
       return updatedBlock;
     }),
 
   // 删除 Block
   deleteBlock: protectedProcedure
-    .input(z.object({ id: z.string() }))
+    .input(z.object({
+      id: z.string(),
+      clientId: z.string().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       // 验证 Block 权限
       const [block] = await db
@@ -116,8 +136,24 @@ export const blocksRouter = createTRPCRouter({
         .delete(blocks)
         .where(eq(blocks.id, input.id));
 
-      // TODO: 记录操作日志
-      // await recordOperation(block.document.id, 'delete_block', { blockId: input.id }, ctx.user.id);
+      const [lastOperation] = await db
+        .select({ version: operations.version })
+        .from(operations)
+        .where(eq(operations.documentId, block.document.id))
+        .orderBy(desc(operations.version))
+        .limit(1);
+
+      const nextVersion = lastOperation ? lastOperation.version + 1 : 1;
+
+      await db.insert(operations).values({
+        documentId: block.document.id,
+        blockId: block.block.id,
+        type: "delete_block",
+        payload: { blockId: input.id } as Record<string, unknown>,
+        clientId: input.clientId ?? ctx.user.id,
+        userId: ctx.user.id,
+        version: nextVersion,
+      });
 
       return { success: true };
     }),
@@ -168,6 +204,7 @@ export const blocksRouter = createTRPCRouter({
         id: z.string(),
         position: z.number(),
       })),
+      clientId: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       // 验证文档权限
@@ -206,15 +243,34 @@ export const blocksRouter = createTRPCRouter({
 
       await Promise.all(updatePromises);
 
-      // TODO: 记录操作日志
-      // await recordOperation(input.documentId, 'reorder_blocks', input, ctx.user.id);
+      const [lastOperation] = await db
+        .select({ version: operations.version })
+        .from(operations)
+        .where(eq(operations.documentId, input.documentId))
+        .orderBy(desc(operations.version))
+        .limit(1);
+
+      const nextVersion = lastOperation ? lastOperation.version + 1 : 1;
+
+      await db.insert(operations).values({
+        documentId: input.documentId,
+        blockId: null,
+        type: "reorder_blocks",
+        payload: input as Record<string, unknown>,
+        clientId: input.clientId ?? ctx.user.id,
+        userId: ctx.user.id,
+        version: nextVersion,
+      });
 
       return { success: true };
     }),
 
   // 复制 Block
   duplicateBlock: protectedProcedure
-    .input(z.object({ id: z.string() }))
+    .input(z.object({
+      id: z.string(),
+      clientId: z.string().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       // 获取原 Block
       const [originalBlock] = await db
@@ -261,11 +317,27 @@ export const blocksRouter = createTRPCRouter({
         })
         .returning();
 
-      // TODO: 记录操作日志
-      // await recordOperation(originalBlock.document.id, 'duplicate_block', {
-      //   originalId: input.id,
-      //   duplicatedId: duplicatedBlock.id
-      // }, ctx.user.id);
+      const [lastOperation] = await db
+        .select({ version: operations.version })
+        .from(operations)
+        .where(eq(operations.documentId, originalBlock.document.id))
+        .orderBy(desc(operations.version))
+        .limit(1);
+
+      const nextVersion = lastOperation ? lastOperation.version + 1 : 1;
+
+      await db.insert(operations).values({
+        documentId: originalBlock.document.id,
+        blockId: duplicatedBlock.id,
+        type: "duplicate_block",
+        payload: {
+          originalId: input.id,
+          duplicatedId: duplicatedBlock.id,
+        } as Record<string, unknown>,
+        clientId: input.clientId ?? ctx.user.id,
+        userId: ctx.user.id,
+        version: nextVersion,
+      });
 
       return duplicatedBlock;
     }),
@@ -294,7 +366,7 @@ export const blocksRouter = createTRPCRouter({
         });
       }
 
-      let whereConditions = [
+      const whereConditions = [
         eq(blocks.documentId, input.documentId),
       ];
 
@@ -363,16 +435,15 @@ export const blocksRouter = createTRPCRouter({
         });
       }
 
-      // TODO: 实现操作历史查询
-      // const operations = await db
-      //   .select()
-      //   .from(operations)
-      //   .where(eq(operations.blockId, input.blockId))
-      //   .orderBy(desc(operations.timestamp))
-      //   .limit(input.limit);
+      const history = await db
+        .select()
+        .from(operations)
+        .where(eq(operations.blockId, input.blockId))
+        .orderBy(desc(operations.timestamp))
+        .limit(input.limit);
 
       return {
-        operations: [], // 暂时返回空数组
+        operations: history,
         block: block.block,
       };
     }),

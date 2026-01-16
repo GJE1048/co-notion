@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
-import { Type, Heading1, Heading2, Heading3, List, Code, Image, FileText, Quote, CheckSquare, Minus } from "lucide-react";
+import { Type, Heading1, Heading2, Heading3, List, Code, Image, FileText, Quote, CheckSquare, Minus, Plus } from "lucide-react";
 import type { blocks } from "@/db/schema";
 
 type Block = typeof blocks.$inferSelect;
@@ -15,6 +15,7 @@ interface BlockEditorProps {
   onBlockCreate: (block: Omit<Block, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onBlockUpdate: (blockId: string, updates: Partial<Block>) => void;
   onBlockDelete: (blockId: string) => void;
+  onBlockCreateAfter?: (afterBlockId: string, block: Omit<Block, 'id' | 'createdAt' | 'updatedAt'>) => void;
   readOnly?: boolean;
 }
 
@@ -22,17 +23,33 @@ interface BlockComponentProps {
   block: Block;
   onUpdate: (updates: Partial<Block>) => void;
   onDelete: () => void;
+  onCreateAfter?: (type: string) => void;
   readOnly?: boolean;
 }
 
 // 单个 Block 组件
-const BlockComponent = ({ block, onUpdate, onDelete, readOnly }: BlockComponentProps) => {
+const BlockComponent = ({ block, onUpdate, onDelete, onCreateAfter, readOnly }: BlockComponentProps) => {
   const [isEditing, setIsEditing] = useState(false);
 
+  // 监听创建新块的全局事件
+  useEffect(() => {
+    const handleCreateBlockAfter = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail?.blockId === block.id && onCreateAfter) {
+        onCreateAfter(customEvent.detail.type);
+      }
+    };
+
+    window.addEventListener('createBlockAfter', handleCreateBlockAfter);
+    return () => {
+      window.removeEventListener('createBlockAfter', handleCreateBlockAfter);
+    };
+  }, [block.id, onCreateAfter]);
+
   const handleContentUpdate = useCallback((newContent: Record<string, any>) => {
+    // 立即更新，不等待防抖
     onUpdate({
       content: newContent,
-      updatedAt: new Date(),
     });
   }, [onUpdate]);
 
@@ -84,8 +101,25 @@ const BlockComponent = ({ block, onUpdate, onDelete, readOnly }: BlockComponentP
             onChange={(e) => handleContentUpdate({
               text: { content: e.target.value }
             })}
+            onKeyDown={(e) => {
+              // 在段落末尾按 Enter 时创建新段落
+              if (e.key === 'Enter' && !e.shiftKey && !readOnly) {
+                const content = (block.content as any)?.text?.content || '';
+                const cursorPosition = e.currentTarget.selectionStart;
+                const isAtEnd = cursorPosition === content.length;
+                
+                if (isAtEnd && content.trim() !== '') {
+                  e.preventDefault();
+                  // 触发创建新段落的回调（通过父组件处理）
+                  const event = new CustomEvent('createBlockAfter', {
+                    detail: { blockId: block.id, type: 'paragraph' }
+                  });
+                  window.dispatchEvent(event);
+                }
+              }
+            }}
             className="min-h-[2rem] resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 bg-transparent text-base leading-relaxed"
-            placeholder="开始输入内容..."
+            placeholder="开始输入内容... (按 Enter 创建新段落)"
             readOnly={readOnly}
           />
         );
@@ -269,64 +303,99 @@ const BlockComponent = ({ block, onUpdate, onDelete, readOnly }: BlockComponentP
   };
 
   return (
-    <div className="group relative">
+    <div className="group relative py-2 hover:bg-slate-50/50 dark:hover:bg-slate-800/30 rounded-lg transition-colors">
       {/* Block 工具栏 */}
       {!readOnly && (
-        <div className="absolute -left-10 top-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute -left-12 top-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
           <div className="flex flex-col gap-1">
             <Button
               size="sm"
               variant="ghost"
-              className="size-6 p-0"
+              className="size-8 p-0 hover:bg-slate-200 dark:hover:bg-slate-700"
               onClick={() => setIsEditing(!isEditing)}
+              title="转换块类型"
             >
-              +
+              <Type className="size-4" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="size-8 p-0 hover:bg-slate-200 dark:hover:bg-slate-700 text-red-500"
+              onClick={onDelete}
+              title="删除块"
+            >
+              🗑️
             </Button>
           </div>
         </div>
       )}
 
       {/* Block 内容 */}
-      <div className="py-1">
+      <div className="px-2" onFocus={() => setIsEditing(false)}>
         {renderBlockContent()}
       </div>
 
+      {/* 在块下方显示添加按钮 */}
+      {!readOnly && (
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity mt-1 mb-1 px-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 h-6"
+            onClick={() => onCreateAfter?.('paragraph')}
+          >
+            <Plus className="size-3 mr-1" />
+            添加段落
+          </Button>
+        </div>
+      )}
+
       {/* Block 操作菜单 */}
       {isEditing && !readOnly && (
-        <Card className="absolute left-0 top-full mt-1 p-2 shadow-lg z-10">
-          <div className="grid grid-cols-4 gap-1 min-w-[200px]">
-            <Button size="sm" variant="ghost" onClick={() => onUpdate({ type: 'heading_1' })} title="一级标题">
+        <Card className="absolute left-0 top-full mt-2 p-3 shadow-xl border border-slate-200 dark:border-slate-700 z-20 bg-white dark:bg-slate-800">
+          <div className="grid grid-cols-4 gap-2 min-w-[240px]">
+            <div className="col-span-4 text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+              转换为：
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => { onUpdate({ type: 'heading_1' }); setIsEditing(false); }} title="一级标题" className="flex flex-col items-center gap-1 h-auto py-2">
               <Heading1 className="size-4" />
+              <span className="text-xs">标题1</span>
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onUpdate({ type: 'heading_2' })} title="二级标题">
+            <Button size="sm" variant="ghost" onClick={() => { onUpdate({ type: 'heading_2' }); setIsEditing(false); }} title="二级标题" className="flex flex-col items-center gap-1 h-auto py-2">
               <Heading2 className="size-4" />
+              <span className="text-xs">标题2</span>
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onUpdate({ type: 'heading_3' })} title="三级标题">
+            <Button size="sm" variant="ghost" onClick={() => { onUpdate({ type: 'heading_3' }); setIsEditing(false); }} title="三级标题" className="flex flex-col items-center gap-1 h-auto py-2">
               <Heading3 className="size-4" />
+              <span className="text-xs">标题3</span>
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onUpdate({ type: 'paragraph' })} title="段落">
+            <Button size="sm" variant="ghost" onClick={() => { onUpdate({ type: 'paragraph' }); setIsEditing(false); }} title="段落" className="flex flex-col items-center gap-1 h-auto py-2">
               <Type className="size-4" />
+              <span className="text-xs">段落</span>
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onUpdate({ type: 'list' })} title="列表">
+            <Button size="sm" variant="ghost" onClick={() => { onUpdate({ type: 'list' }); setIsEditing(false); }} title="列表" className="flex flex-col items-center gap-1 h-auto py-2">
               <List className="size-4" />
+              <span className="text-xs">列表</span>
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onUpdate({ type: 'todo' })} title="待办事项">
+            <Button size="sm" variant="ghost" onClick={() => { onUpdate({ type: 'todo' }); setIsEditing(false); }} title="待办事项" className="flex flex-col items-center gap-1 h-auto py-2">
               <CheckSquare className="size-4" />
+              <span className="text-xs">待办</span>
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onUpdate({ type: 'code' })} title="代码块">
+            <Button size="sm" variant="ghost" onClick={() => { onUpdate({ type: 'code' }); setIsEditing(false); }} title="代码块" className="flex flex-col items-center gap-1 h-auto py-2">
               <Code className="size-4" />
+              <span className="text-xs">代码</span>
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onUpdate({ type: 'quote' })} title="引用">
+            <Button size="sm" variant="ghost" onClick={() => { onUpdate({ type: 'quote' }); setIsEditing(false); }} title="引用" className="flex flex-col items-center gap-1 h-auto py-2">
               <Quote className="size-4" />
+              <span className="text-xs">引用</span>
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onUpdate({ type: 'divider' })} title="分割线">
+            <Button size="sm" variant="ghost" onClick={() => { onUpdate({ type: 'divider' }); setIsEditing(false); }} title="分割线" className="flex flex-col items-center gap-1 h-auto py-2">
               <Minus className="size-4" />
+              <span className="text-xs">分割</span>
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onUpdate({ type: 'image' })} title="图片">
+            <Button size="sm" variant="ghost" onClick={() => { onUpdate({ type: 'image' }); setIsEditing(false); }} title="图片" className="flex flex-col items-center gap-1 h-auto py-2">
               <Image className="size-4" />
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => onDelete()} title="删除" className="col-span-2">
-              🗑️ 删除
+              <span className="text-xs">图片</span>
             </Button>
           </div>
         </Card>
@@ -341,9 +410,40 @@ export const BlockEditor = ({
   onBlockCreate,
   onBlockUpdate,
   onBlockDelete,
+  onBlockCreateAfter,
   readOnly = false
 }: BlockEditorProps) => {
   const sortedBlocks = [...blocks].sort((a, b) => a.position - b.position);
+
+  const handleCreateAfter = useCallback((afterBlockId: string, type: string) => {
+    if (!onBlockCreateAfter) return;
+    
+    const afterBlock = sortedBlocks.find(b => b.id === afterBlockId);
+    if (!afterBlock) return;
+
+    const newPosition = afterBlock.position + 1;
+    // 更新后续块的位置
+    const blocksToUpdate = sortedBlocks.filter(b => b.position >= newPosition);
+    
+    onBlockCreateAfter(afterBlockId, {
+      documentId: afterBlock.documentId,
+      parentId: afterBlock.parentId,
+      type: type as any,
+      content: type === 'paragraph' 
+        ? { text: { content: '' } }
+        : type === 'heading_1'
+        ? { text: { content: '' } }
+        : type === 'list'
+        ? { list: { items: [''] } }
+        : type === 'code'
+        ? { code: { content: '', language: 'javascript' } }
+        : { text: { content: '' } },
+      properties: {},
+      position: newPosition,
+      version: 1,
+      createdBy: '', // 服务器端设置
+    });
+  }, [onBlockCreateAfter, sortedBlocks]);
 
   return (
     <div className="space-y-2 min-h-[400px]">
@@ -353,6 +453,7 @@ export const BlockEditor = ({
           block={block}
           onUpdate={(updates) => onBlockUpdate(block.id, updates)}
           onDelete={() => onBlockDelete(block.id)}
+          onCreateAfter={(type) => handleCreateAfter(block.id, type)}
           readOnly={readOnly}
         />
       ))}

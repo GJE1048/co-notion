@@ -2,25 +2,41 @@
 
 import { useRouter } from "next/navigation";
 import { useAuth } from "@clerk/nextjs";
+import { useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   FileText,
   MoreHorizontal,
-  Calendar
+  Calendar,
+  RefreshCw
 } from "lucide-react";
+import { trpc } from "@/trpc/client";
 import type { documents } from "@/db/schema";
 
 type Document = typeof documents.$inferSelect;
 
 interface RecentDocumentsProps {
-  documents: Document[];
+  documents?: Document[];
 }
 
-export const RecentDocuments = ({ documents: recentDocuments }: RecentDocumentsProps) => {
+export const RecentDocuments = ({ documents: initialDocuments }: RecentDocumentsProps) => {
   const router = useRouter();
   const { isSignedIn, isLoaded } = useAuth();
+
+  // 使用 tRPC 查询获取用户文档
+  const {
+    data: documents,
+    isLoading,
+    error,
+    refetch
+  } = trpc.documents.getUserDocuments.useQuery(undefined, {
+    enabled: isSignedIn && isLoaded,
+  });
+
+  // 优先使用 tRPC 查询的数据，如果没有则使用初始数据（服务端传递的）
+  const recentDocuments = documents || initialDocuments || [];
 
   const handleDocumentClick = (documentId: string) => {
     if (!isLoaded) return;
@@ -44,23 +60,85 @@ export const RecentDocuments = ({ documents: recentDocuments }: RecentDocumentsP
     router.push("/documents");
   };
 
+  // 当页面可见时自动刷新（用户返回页面时）
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isSignedIn && isLoaded) {
+        refetch();
+      }
+    };
+
+    // 页面聚焦时也刷新
+    const handleFocus = () => {
+      if (isSignedIn && isLoaded) {
+        refetch();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    // 初始加载后也刷新一次，确保数据最新
+    if (isSignedIn && isLoaded) {
+      refetch();
+    }
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [refetch, isSignedIn, isLoaded]);
+
+  const handleRefresh = () => {
+    refetch();
+  };
+
   return (
     <Card className="shadow-lg border-0 bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-xl font-semibold text-slate-900 dark:text-slate-100">
           最近文档
         </CardTitle>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-slate-600 dark:text-slate-400"
-          onClick={handleViewAllClick}
-        >
-          查看全部
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-slate-600 dark:text-slate-400"
+            onClick={handleRefresh}
+            disabled={isLoading}
+          >
+            <RefreshCw className={`size-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-slate-600 dark:text-slate-400"
+            onClick={handleViewAllClick}
+          >
+            查看全部
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {recentDocuments.map((doc) => (
+        {isLoading && recentDocuments.length === 0 ? (
+          <div className="text-center py-8 text-slate-500 dark:text-slate-400">
+            <RefreshCw className="size-6 animate-spin mx-auto mb-2" />
+            <p>加载文档中...</p>
+          </div>
+        ) : error ? (
+          <div className="text-center py-8 text-red-500 dark:text-red-400">
+            <p>加载文档失败，请重试</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRefresh}
+              className="mt-2"
+            >
+              重试
+            </Button>
+          </div>
+        ) : (
+          recentDocuments.slice(0, 5).map((doc) => (
           <div
             key={doc.id}
             className="flex items-center justify-between p-4 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors group cursor-pointer"
@@ -102,9 +180,10 @@ export const RecentDocuments = ({ documents: recentDocuments }: RecentDocumentsP
               </Button>
             </div>
           </div>
-        ))}
+          ))
+        )}
 
-        {recentDocuments.length === 0 && (
+        {!isLoading && recentDocuments.length === 0 && (
           <div className="text-center py-12 text-slate-500 dark:text-slate-400">
             <FileText size={48} className="mx-auto mb-4 opacity-50" />
             <p>还没有文档，开始创建你的第一个文档吧</p>

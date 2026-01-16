@@ -23,7 +23,7 @@ const createTagSchema = z.object({
 });
 
 export const workspacesRouter = createTRPCRouter({
-  // 获取用户的所有工作区
+  // 获取用户的所有工作区（通过 clerkId 关联）
   getUserWorkspaces: protectedProcedure
     .query(async ({ ctx }) => {
       const userWorkspaces = await db
@@ -42,7 +42,7 @@ export const workspacesRouter = createTRPCRouter({
       return userWorkspaces;
     }),
 
-  // 获取单个工作区详情
+  // 获取单个工作区详情（通过 clerkId 关联）
   getWorkspace: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
@@ -89,15 +89,18 @@ export const workspacesRouter = createTRPCRouter({
       return newWorkspace;
     }),
 
-  // 更新工作区
+  // 更新工作区（通过 clerkId 关联）
   updateWorkspace: protectedProcedure
     .input(z.object({
       id: z.string(),
       data: updateWorkspaceSchema,
     }))
     .mutation(async ({ ctx, input }) => {
+      // 先验证工作区权限（通过 clerkId）
       const [existingWorkspace] = await db
-        .select()
+        .select({
+          workspace: workspaces,
+        })
         .from(workspaces)
         .where(and(
           eq(workspaces.id, input.id),
@@ -123,12 +126,15 @@ export const workspacesRouter = createTRPCRouter({
       return updatedWorkspace;
     }),
 
-  // 删除工作区
+  // 删除工作区（通过 clerkId 关联）
   deleteWorkspace: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // 先验证工作区权限（通过 clerkId）
       const [existingWorkspace] = await db
-        .select()
+        .select({
+          workspace: workspaces,
+        })
         .from(workspaces)
         .where(and(
           eq(workspaces.id, input.id),
@@ -162,20 +168,22 @@ export const workspacesRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  // 获取工作区的文档
+  // 获取工作区的文档（通过 clerkId 关联）
   getWorkspaceDocuments: protectedProcedure
     .input(z.object({ workspaceId: z.string() }))
     .query(async ({ ctx, input }) => {
-      // 验证工作区权限
-      const [workspace] = await db
-        .select()
+      // 验证工作区权限（通过 clerkId）
+      const [workspaceResult] = await db
+        .select({
+          workspace: workspaces,
+        })
         .from(workspaces)
         .where(and(
           eq(workspaces.id, input.workspaceId),
           eq(workspaces.ownerId, ctx.user.id)
         ));
 
-      if (!workspace) {
+      if (!workspaceResult) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "工作区不存在",
@@ -206,10 +214,12 @@ export const workspacesRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       let workspaceId = input.workspaceId;
 
-      // 如果没有指定工作区，使用用户的默认工作区
+      // 如果没有指定工作区，使用用户的默认工作区（通过 clerkId）
       if (!workspaceId) {
         const [defaultWorkspace] = await db
-          .select()
+          .select({
+            workspace: workspaces,
+          })
           .from(workspaces)
           .where(and(
             eq(workspaces.ownerId, ctx.user.id),
@@ -222,19 +232,21 @@ export const workspacesRouter = createTRPCRouter({
             message: "未找到默认工作区",
           });
         }
-        workspaceId = defaultWorkspace.id;
+        workspaceId = defaultWorkspace.workspace.id;
       }
 
-      // 验证工作区权限
-      const [workspace] = await db
-        .select()
+      // 验证工作区权限（通过 clerkId）
+      const [workspaceResult] = await db
+        .select({
+          workspace: workspaces,
+        })
         .from(workspaces)
         .where(and(
           eq(workspaces.id, workspaceId),
           eq(workspaces.ownerId, ctx.user.id)
         ));
 
-      if (!workspace) {
+      if (!workspaceResult) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "工作区不存在",
@@ -255,20 +267,22 @@ export const workspacesRouter = createTRPCRouter({
       return newTag;
     }),
 
-  // 获取工作区的标签
+  // 获取工作区的标签（通过 clerkId 关联）
   getWorkspaceTags: protectedProcedure
     .input(z.object({ workspaceId: z.string() }))
     .query(async ({ ctx, input }) => {
-      // 验证工作区权限
-      const [workspace] = await db
-        .select()
+      // 验证工作区权限（通过 clerkId）
+      const [workspaceResult] = await db
+        .select({
+          workspace: workspaces,
+        })
         .from(workspaces)
         .where(and(
           eq(workspaces.id, input.workspaceId),
           eq(workspaces.ownerId, ctx.user.id)
         ));
 
-      if (!workspace) {
+      if (!workspaceResult) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "工作区不存在",

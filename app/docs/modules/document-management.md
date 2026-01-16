@@ -82,7 +82,26 @@ interface BlockContent {
 
 ## 核心功能
 
-### 1. 操作日志（OpLog）同步
+### 1. Block 级协同模型概览
+
+- **存储粒度**：每个 Block 对应 blocks 表中的一行记录，字段包括：
+  - `id`: UUID，Block 唯一标识，支持跨文档引用
+  - `document_id`: 所属文档
+  - `parent_id`: 父 Block，实现树形结构
+  - `type`: Block 类型（paragraph、heading 等）
+  - `content`: JSONB，存储具体内容
+  - `properties`: JSONB，存储额外属性（如样式、引用信息等）
+  - `position`: 整数，同一父节点下的排序位置，配合批量重排 API 支持拖拽排序
+  - `version`: Block 内部版本号
+  - `created_by`/`created_at`/`updated_at`: 审计字段
+- **引用能力**：
+  - 通过在 `properties` 中约定结构（如 `{ reference: { blockId, documentId } }`）实现 Block 间 / 跨文档引用
+  - 前端在渲染时根据引用信息发起 Block 详情查询并进行展示
+- **协同基础**：
+  - 所有对 Block 的结构和内容修改都会转换为 Operation，写入 `operations` 表
+  - 操作日志 + Block 当前状态 + 快照共同构成协同编辑与历史回溯的基础
+
+### 2. 操作日志（OpLog）同步
 
 **操作类型定义**：
 ```typescript
@@ -106,12 +125,13 @@ interface Operation {
 ```
 
 **同步机制**：
-- **本地编辑**：用户操作立即反映到本地状态
-- **增量同步**：只发送操作指令，不传输全文内容
-- **冲突解决**：基于时间戳和业务规则自动合并冲突
-- **离线支持**：本地缓存，支持离线编辑后上线同步
+- **本地编辑**：用户在前端 Block 编辑器中的操作（创建 / 更新 / 删除 / 拖拽移动）首先更新本地 UI 状态
+- **增量同步**：前端将本次操作封装为 Operation，通过 TRPC / REST 写入 `operations` 表，同时更新 blocks 表
+- **实时推送**：后端在记录 Operation 后，通过 WebSocket 将操作广播给同一文档房间的其他在线协作者
+- **冲突解决**：基于时间戳、版本号以及后续引入的 CRDT / OT 规则合并冲突
+- **离线支持**：客户端在离线时缓存本地 Operation，恢复连接后批量上报并进行重放
 
-### 2. 快照机制
+### 3. 快照机制
 
 **定期快照**：
 - 每 5 分钟自动创建文档快照
@@ -136,7 +156,7 @@ interface DocumentSnapshot {
 }
 ```
 
-### 3. 实时协同编辑
+### 4. 实时协同编辑
 
 **协同状态管理**：
 - 使用 Yjs 或类似 CRDT 库管理本地状态
@@ -150,7 +170,7 @@ interface DocumentSnapshot {
 - 编辑冲突提示
 - 实时通知机制
 
-### 4. 文档组织与导航
+### 5. 文档组织与导航
 
 **工作区结构**：
 - 支持多级文件夹组织
@@ -300,12 +320,19 @@ interface CollaborationIndicatorProps {
 - `Cmd/Ctrl+I`: 斜体
 - `Cmd/Ctrl+K`: 链接
 - `/`: 快速创建 Block（Slash 命令）
+ 
+**拖拽操作与排序**：
+- Block 在同一父节点下支持拖拽调整顺序，前端在拖拽结束后计算新的 `position` 序列，并调用后端的批量重排接口：
+  - `reorderBlocks(documentId, parentId, blockUpdates: Array<{ id, position }>)`
+- 跨层级移动（改变父节点）通过 `moveBlock(id, newParentId, newPosition)` 实现
+- 拖拽排序完成后，会同步写入 blocks 表并记录对应的 `reorder_blocks` / `move_block` 操作日志
 
-**拖拽操作**：
-- Block 拖拽重新排序
-- 跨文档 Block 引用
-- 文件拖拽上传
-- 模板拖拽应用
+**跨文档 Block 引用**：
+- 用户可以在文档中插入“引用 Block”，引用其他文档中的 Block 内容
+- 引用 Block 的 `type` 可以仍然使用文本类类型（如 `paragraph`），但在 `properties.reference` 中记录来源：
+  - `properties.reference = { blockId: string, documentId: string }`
+- 渲染时根据 `reference` 信息加载目标 Block 内容，保持展示同步
+- 被引用 Block 更新后，通过实时协同机制（WebSocket + Operation）将变更推送到引用方，实现“跟随更新”的效果
 
 **右键菜单**：
 - 复制/粘贴 Block

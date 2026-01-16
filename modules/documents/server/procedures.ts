@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { protectedProcedure, createTRPCRouter } from "@/trpc/init";
 import { db } from "@/db";
-import { documents, blocks, workspaces } from "@/db/schema";
-import { eq, and, desc, asc, sql } from "drizzle-orm";
+import { documents, blocks, workspaces, operations } from "@/db/schema";
+import { eq, and, desc, asc, sql, gt } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
 // Schema definitions
@@ -30,6 +30,7 @@ const createBlockSchema = z.object({
   content: z.unknown().default({}),
   properties: z.unknown().default({}),
   position: z.number().default(0),
+  clientId: z.string().optional(),
 });
 
 const updateBlockSchema = z.object({
@@ -291,15 +292,35 @@ export const documentsRouter = createTRPCRouter({
       const [newBlock] = await db
         .insert(blocks)
         .values({
-          ...input,
+          documentId: input.documentId,
+          type: input.type,
+          parentId: input.parentId ?? null,
+          content: input.content,
+          properties: input.properties,
           position: input.position ?? nextPosition,
           version: 1,
           createdBy: ctx.user.id,
         })
         .returning();
 
-      // TODO: 记录操作日志
-      // await recordOperation(input.documentId, 'create_block', newBlock, ctx.user.id);
+      const [lastOperation] = await db
+        .select({ version: operations.version })
+        .from(operations)
+        .where(eq(operations.documentId, input.documentId))
+        .orderBy(desc(operations.version))
+        .limit(1);
+
+      const nextVersion = lastOperation ? lastOperation.version + 1 : 1;
+
+      await db.insert(operations).values({
+        documentId: input.documentId,
+        blockId: newBlock.id,
+        type: "create_block",
+        payload: newBlock as unknown as Record<string, unknown>,
+        clientId: input.clientId ?? ctx.user.id,
+        userId: ctx.user.id,
+        version: nextVersion,
+      });
 
       return newBlock;
     }),
@@ -446,6 +467,53 @@ export const documentsRouter = createTRPCRouter({
       return {
         versions: [], // 暂时返回空数组
         currentVersion: 1,
+      };
+    }),
+
+  // 按文档增量获取操作日志
+  getDocumentOperations: protectedProcedure
+    .input(z.object({
+      documentId: z.string(),
+      sinceVersion: z.number().int().min(0).default(0),
+      limit: z.number().int().min(1).max(200).default(100),
+    }))
+    .query(async ({ ctx, input }) => {
+      const [document] = await db
+        .select()
+        .from(documents)
+        .where(and(
+          eq(documents.id, input.documentId),
+          eq(documents.ownerId, ctx.user.id)
+        ));
+
+      if (!document) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "文档不存在",
+        });
+      }
+
+      const conditions = [
+        eq(operations.documentId, input.documentId),
+        input.sinceVersion > 0
+          ? gt(operations.version, input.sinceVersion)
+          : sql`TRUE`,
+      ];
+
+      const ops = await db
+        .select()
+        .from(operations)
+        .where(and(...conditions))
+        .orderBy(asc(operations.version))
+        .limit(input.limit);
+
+      const latestVersion = ops.length > 0
+        ? ops[ops.length - 1].version
+        : input.sinceVersion;
+
+      return {
+        operations: ops,
+        latestVersion,
       };
     }),
 });

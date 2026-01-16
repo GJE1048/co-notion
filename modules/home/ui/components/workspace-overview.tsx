@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -8,10 +7,7 @@ import {
   FolderOpen,
   Activity
 } from "lucide-react";
-
-interface WorkspaceOverviewProps {
-  userId?: string | null;
-}
+import { trpc } from "@/trpc/client";
 
 interface WorkspaceStats {
   totalDocuments: number;
@@ -21,54 +17,22 @@ interface WorkspaceStats {
   storageLimit: number;
 }
 
-export const WorkspaceOverview = ({ userId }: WorkspaceOverviewProps) => {
-  const [stats, setStats] = useState<WorkspaceStats>({
-    totalDocuments: 0,
-    totalFolders: 0,
-    activeDocuments: 0,
-    storageUsed: 0,
+export const WorkspaceOverview = () => {
+  const { data: documents, isLoading } = trpc.documents.getUserDocuments.useQuery();
+
+  // 计算统计数据
+  const stats = {
+    totalDocuments: documents?.length || 0,
+    totalFolders: 0, // 暂时没有文件夹功能
+    activeDocuments: documents?.filter((doc) => {
+      const updatedAt = doc.updatedAt ? new Date(doc.updatedAt) : null;
+      if (!updatedAt) return false;
+      const daysSinceUpdate = (Date.now() - updatedAt.getTime()) / (1000 * 60 * 60 * 24);
+      return daysSinceUpdate < 7; // 7天内更新过的算活跃
+    }).length || 0,
+    storageUsed: (documents?.length || 0) * 50 / 1024 / 1024, // 简单估算：每个文档平均50KB，转换为GB
     storageLimit: 10,
-  });
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    if (!userId) {
-      setIsLoading(false);
-      return;
-    }
-
-    const fetchStats = async () => {
-      try {
-        const response = await fetch("/api/documents");
-        if (response.ok) {
-          const data = await response.json();
-          const documents = data.documents || [];
-
-          // 计算存储使用（简单估算：每个文档平均50KB）
-          const estimatedSize = documents.length * 50 / 1024 / 1024; // MB转GB
-
-          setStats({
-            totalDocuments: documents.length,
-            totalFolders: 0, // 暂时没有文件夹功能
-            activeDocuments: documents.filter((doc: { updatedAt: Date | null }) => {
-              const updatedAt = doc.updatedAt ? new Date(doc.updatedAt) : null;
-              if (!updatedAt) return false;
-              const daysSinceUpdate = (Date.now() - updatedAt.getTime()) / (1000 * 60 * 60 * 24);
-              return daysSinceUpdate < 7; // 7天内更新过的算活跃
-            }).length,
-            storageUsed: estimatedSize,
-            storageLimit: 10,
-          });
-        }
-      } catch (error) {
-        console.error("获取统计数据失败:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchStats();
-  }, [userId]);
+  };
 
   const storagePercentage = stats.storageLimit > 0
     ? (stats.storageUsed / stats.storageLimit) * 100
