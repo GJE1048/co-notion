@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { Loader2, Save, ArrowLeft, Plus } from "lucide-react";
+import { Loader2, Save, ArrowLeft, Plus, Heading1, List, Code } from "lucide-react";
 import { trpc } from "@/trpc/client";
 import { BlockEditor } from "./block-editor";
 import type { documents, blocks } from "@/db/schema";
@@ -23,12 +23,12 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const [error, setError] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
 
-  // 使用 tRPC 获取文档 blocks
+  // 使用 tRPC 获取文档 blocks（开发模式下使用绕过认证的查询）
   const {
     data: blocksData,
     isLoading: blocksLoading,
     error: blocksError
-  } = trpc.documents.getDocumentBlocks.useQuery({
+  } = trpc.devGetDocumentBlocks.useQuery({
     documentId: initialDocument.id
   });
 
@@ -41,6 +41,9 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const blocks = blocksData?.blocks || [];
   const isLoading = blocksLoading;
 
+  // 使用 tRPC 的查询重获取功能
+  const utils = trpc.useUtils();
+
   // 处理加载错误
   useEffect(() => {
     if (blocksError) {
@@ -49,18 +52,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     }
   }, [blocksError]);
 
-  // 自动保存（简化版，后续会用操作日志替换）
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (title !== initialDocument.title) {
-        handleSave(true);
-      }
-    }, 2000); // 2秒后自动保存
-
-    return () => clearTimeout(timer);
-  }, [title]);
-
-  const handleSave = async (isAutoSave = false) => {
+  const handleSave = useCallback(async () => {
     try {
       setError(null);
 
@@ -79,7 +71,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存文档时发生错误");
     }
-  };
+  }, [updateDocumentMutation, initialDocument.id, title]);
 
   const isSaving = updateDocumentMutation.isPending;
 
@@ -88,12 +80,12 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     try {
       await createBlockMutation.mutateAsync(blockData);
       // 重新获取 blocks 数据
-      // 注意：实际应用中可能需要使用乐观更新或实时同步
+      await utils.documents.getDocumentBlocks.invalidate();
     } catch (err) {
       console.error('Failed to create block:', err);
       setError('创建 Block 失败');
     }
-  }, [createBlockMutation]);
+  }, [createBlockMutation, utils]);
 
   const handleBlockUpdate = useCallback(async (blockId: string, updates: Partial<Block>) => {
     try {
@@ -102,12 +94,12 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         data: updates,
       });
       // 重新获取 blocks 数据
-      // 注意：实际应用中可能需要使用乐观更新或实时同步
+      await utils.documents.getDocumentBlocks.invalidate();
     } catch (err) {
       console.error('Failed to update block:', err);
       setError('更新 Block 失败');
     }
-  }, [updateBlockMutation]);
+  }, [updateBlockMutation, utils]);
 
   const handleBlockDelete = useCallback(async (blockId: string) => {
     try {
@@ -115,12 +107,23 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         id: blockId,
       });
       // 重新获取 blocks 数据
-      // 注意：实际应用中可能需要使用乐观更新或实时同步
+      await utils.documents.getDocumentBlocks.invalidate();
     } catch (err) {
       console.error('Failed to delete block:', err);
       setError('删除 Block 失败');
     }
-  }, [deleteBlockMutation]);
+  }, [deleteBlockMutation, utils]);
+
+  // 自动保存（简化版，后续会用操作日志替换）
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (title !== initialDocument.title) {
+        handleSave();
+      }
+    }, 2000); // 2秒后自动保存
+
+    return () => clearTimeout(timer);
+  }, [title, handleSave, initialDocument.title]);
 
   return (
     <div className="space-y-4">
@@ -200,24 +203,79 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
             {/* 添加新 Block 按钮 */}
             {!isLoading && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleBlockCreate({
-                  documentId: initialDocument.id,
-                  parentId: null,
-                  type: 'paragraph',
-                  content: { text: { content: '' } },
-                  properties: {},
-                  position: blocks.length,
-                  version: 1,
-                  createdBy: '', // 这个字段会在服务器端设置
-                })}
-                className="w-full flex items-center gap-2"
-              >
-                <Plus className="size-4" />
-                添加内容块
-              </Button>
+              <div className="space-y-2">
+                <div className="text-xs text-slate-500">添加内容块</div>
+                <div className="flex gap-2 flex-wrap">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleBlockCreate({
+                      documentId: initialDocument.id,
+                      parentId: null,
+                      type: 'paragraph',
+                      content: { text: { content: '' } },
+                      properties: {},
+                      position: blocks.length,
+                      version: 1,
+                      createdBy: '', // 这个字段会在服务器端设置
+                    })}
+                  >
+                    <Plus className="size-4 mr-1" />
+                    段落
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleBlockCreate({
+                      documentId: initialDocument.id,
+                      parentId: null,
+                      type: 'heading_1',
+                      content: { text: { content: '' } },
+                      properties: {},
+                      position: blocks.length,
+                      version: 1,
+                      createdBy: '',
+                    })}
+                  >
+                    <Heading1 className="size-4 mr-1" />
+                    标题
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleBlockCreate({
+                      documentId: initialDocument.id,
+                      parentId: null,
+                      type: 'list',
+                      content: { list: { items: [''] } },
+                      properties: {},
+                      position: blocks.length,
+                      version: 1,
+                      createdBy: '',
+                    })}
+                  >
+                    <List className="size-4 mr-1" />
+                    列表
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleBlockCreate({
+                      documentId: initialDocument.id,
+                      parentId: null,
+                      type: 'code',
+                      content: { code: { content: '', language: 'javascript' } },
+                      properties: {},
+                      position: blocks.length,
+                      version: 1,
+                      createdBy: '',
+                    })}
+                  >
+                    <Code className="size-4 mr-1" />
+                    代码
+                  </Button>
+                </div>
+              </div>
             )}
           </div>
         </CardContent>

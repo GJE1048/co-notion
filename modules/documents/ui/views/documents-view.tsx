@@ -7,12 +7,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Loader2, FileText, Plus } from "lucide-react";
 
 export const DocumentsView = () => {
-  // 暂时使用开发模式端点绕过认证问题
+  // 使用开发模式的查询绕过认证
   const {
     data: documents,
     isLoading,
     error
-  } = trpc.devDocuments.useQuery();
+  } = trpc.devGetUserDocuments.useQuery();
 
   const createDocumentMutation = trpc.documents.createDocument.useMutation({
     onSuccess: (newDocument) => {
