@@ -99,13 +99,17 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const [chatMode, setChatMode] = useState<"chat" | "article">("chat");
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
 
+  const blocksQueryInput = {
+    documentId: initialDocument.id,
+    cursor: 0,
+    limit: 30,
+  };
+
   const {
     data: blocksData,
     isLoading: blocksLoading,
     error: blocksError
-  } = trpc.documents.getDocumentBlocks.useQuery({
-    documentId: initialDocument.id
-  });
+  } = trpc.documents.getDocumentBlocksPage.useQuery(blocksQueryInput);
 
   const createBlockMutation = trpc.documents.createBlock.useMutation();
   const updateBlockMutation = trpc.blocks.updateBlock.useMutation();
@@ -223,8 +227,8 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         return;
       }
 
-      utils.documents.getDocumentBlocks.setData(
-        { documentId: initialDocument.id },
+      utils.documents.getDocumentBlocksPage.setData(
+        blocksQueryInput,
         (oldData) => {
           if (!oldData) {
             return oldData;
@@ -407,7 +411,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         clientId,
       });
       syncBlockToYjs(newBlock as Block);
-      await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
+      await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
     } catch (err) {
       console.error('Failed to create block:', err);
       setError(err instanceof Error ? err.message : '创建 Block 失败');
@@ -435,7 +439,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         clientId,
       });
       syncBlockToYjs(newBlock as Block);
-      await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
+      await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
     } catch (err) {
       console.error('Failed to create block after:', err);
       setError(err instanceof Error ? err.message : '创建 Block 失败');
@@ -449,8 +453,8 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     try {
       setError(null);
       
-      utils.documents.getDocumentBlocks.setData(
-        { documentId: initialDocument.id },
+      utils.documents.getDocumentBlocksPage.setData(
+        blocksQueryInput,
         (oldData) => {
           if (!oldData) return oldData;
           return {
@@ -478,17 +482,17 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
             clientId,
           });
           syncBlockToYjs(updatedBlock as Block);
-          await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
+          await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
         } catch (err) {
           console.error('Failed to update block on server:', err);
-          await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
+          await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
         }
         updateTimeoutRef.current = null;
       }, 500); // 500ms 防抖
     } catch (err) {
       console.error('Failed to update block:', err);
       setError(err instanceof Error ? err.message : '更新 Block 失败');
-      await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
+      await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
     }
   }, [updateBlockMutation, utils, initialDocument.id, clientId, syncBlockToYjs]);
 
@@ -500,7 +504,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         clientId,
       });
       deleteBlockFromYjs(blockId);
-      await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
+      await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
     } catch (err) {
       console.error('Failed to delete block:', err);
       setError(err instanceof Error ? err.message : '删除 Block 失败');

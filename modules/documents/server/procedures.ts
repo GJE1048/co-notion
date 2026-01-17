@@ -6,6 +6,7 @@ import { eq, and, desc, asc, sql, gt, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { notifyDocumentUpdated } from "@/realtime/notify";
 import { ensurePersonalWorkspace } from "@/lib/workspace";
+import { redis } from "@/lib/redis";
 
 // Schema definitions
 const createDocumentSchema = z.object({
@@ -65,6 +66,9 @@ const canManageDocument = (record: DocumentAccessRecord | undefined, userId: str
   return false;
 };
 
+const DOCUMENT_CACHE_TTL_SECONDS = 60;
+const BLOCKS_FIRST_PAGE_TTL_SECONDS = 60;
+
 export const documentsRouter = createTRPCRouter({
   // 获取用户的所有文档
   getUserDocuments: protectedProcedure
@@ -119,6 +123,36 @@ export const documentsRouter = createTRPCRouter({
   getDocument: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
+      const cacheKey = `doc:${input.id}`;
+
+      if (redis) {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          const cachedDoc = cached as {
+            id: string;
+            title: string;
+            workspaceId: string | null;
+            ownerId: string;
+            isTemplate: boolean;
+            isArchived: boolean;
+            permissions: unknown;
+            metadata: unknown;
+            createdAt: string | Date;
+            updatedAt: string | Date;
+            workspace: {
+              id: string | null;
+              name: string | null;
+            } | null;
+          };
+
+          return {
+            ...cachedDoc,
+            createdAt: new Date(cachedDoc.createdAt),
+            updatedAt: new Date(cachedDoc.updatedAt),
+          };
+        }
+      }
+
       const [document] = await db
         .select({
           id: documents.id,
@@ -155,6 +189,10 @@ export const documentsRouter = createTRPCRouter({
           code: "NOT_FOUND",
           message: "文档不存在",
         });
+      }
+
+      if (redis) {
+        await redis.set(cacheKey, document, { ex: DOCUMENT_CACHE_TTL_SECONDS });
       }
 
       return document;
@@ -395,6 +433,11 @@ export const documentsRouter = createTRPCRouter({
         .where(eq(documents.id, input.id))
         .returning();
 
+      if (redis) {
+        await redis.del(`doc:${input.id}`);
+        await redis.del(`blocks:${input.id}:page:1`);
+      }
+
       return updatedDocument;
     }),
 
@@ -445,14 +488,17 @@ export const documentsRouter = createTRPCRouter({
         })
         .where(eq(documents.id, input.id));
 
+      if (redis) {
+        await redis.del(`doc:${input.id}`);
+        await redis.del(`blocks:${input.id}:page:1`);
+      }
+
       return { success: true };
     }),
 
-  // 获取文档的完整 Block 树
   getDocumentBlocks: protectedProcedure
     .input(z.object({ documentId: z.string() }))
     .query(async ({ ctx, input }) => {
-      // 验证文档权限
       const [document] = await db
         .select()
         .from(documents)
@@ -486,6 +532,104 @@ export const documentsRouter = createTRPCRouter({
         blocks: documentBlocks,
         total: documentBlocks.length,
       };
+    }),
+
+  getDocumentBlocksPage: protectedProcedure
+    .input(z.object({
+      documentId: z.string(),
+      cursor: z.number().int().nonnegative().optional(),
+      limit: z.number().int().positive().max(200).optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const [document] = await db
+        .select()
+        .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(and(
+          eq(documents.id, input.documentId),
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
+        ));
+
+      if (!document) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "文档不存在",
+        });
+      }
+
+      const limit = input.limit ?? 30;
+      const offset = input.cursor ?? 0;
+
+      if (redis && offset === 0 && limit === 30) {
+        const cacheKey = `blocks:${input.documentId}:page:1`;
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          const cachedResult = cached as {
+            blocks: (typeof blocks.$inferSelect & {
+              createdAt: string | Date;
+              updatedAt: string | Date;
+            })[];
+            total: number;
+            cursor: number;
+            nextCursor: number | null;
+            hasMore: boolean;
+          };
+
+          const hydratedBlocks = cachedResult.blocks.map((b) => ({
+            ...b,
+            createdAt: new Date(b.createdAt),
+            updatedAt: new Date(b.updatedAt),
+          }));
+
+          return {
+            blocks: hydratedBlocks,
+            total: cachedResult.total,
+            cursor: cachedResult.cursor,
+            nextCursor: cachedResult.nextCursor,
+            hasMore: cachedResult.hasMore,
+          };
+        }
+      }
+
+      const [countResult] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(blocks)
+        .where(eq(blocks.documentId, input.documentId));
+
+      const total = Number(countResult?.count ?? 0);
+
+      const documentBlocks = await db
+        .select()
+        .from(blocks)
+        .where(eq(blocks.documentId, input.documentId))
+        .orderBy(asc(blocks.position))
+        .limit(limit)
+        .offset(offset);
+
+      const hasMore = offset + documentBlocks.length < total;
+      const nextCursor = hasMore ? offset + documentBlocks.length : null;
+
+      const result = {
+        blocks: documentBlocks,
+        total,
+        cursor: offset,
+        nextCursor,
+        hasMore,
+      };
+
+      if (redis && offset === 0 && limit === 30) {
+        const cacheKey = `blocks:${input.documentId}:page:1`;
+        await redis.set(cacheKey, result, { ex: BLOCKS_FIRST_PAGE_TTL_SECONDS });
+      }
+
+      return result;
     }),
 
   // 创建 Block
@@ -562,6 +706,10 @@ export const documentsRouter = createTRPCRouter({
       });
 
       void notifyDocumentUpdated(input.documentId, nextVersion);
+
+      if (redis) {
+        await redis.del(`blocks:${input.documentId}:page:1`);
+      }
 
       return newBlock;
     }),

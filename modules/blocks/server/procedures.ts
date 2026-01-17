@@ -5,6 +5,7 @@ import { blocks, documents, operations, documentCollaborators, workspaces, works
 import { eq, and, desc, sql, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { notifyDocumentUpdated } from "@/realtime/notify";
+import { redis } from "@/lib/redis";
 
 export const blocksRouter = createTRPCRouter({
   // 获取单个 Block 详情
@@ -129,6 +130,10 @@ export const blocksRouter = createTRPCRouter({
 
       void notifyDocumentUpdated(block.document.id, nextVersion);
 
+      if (redis) {
+        await redis.del(`blocks:${block.document.id}:page:1`);
+      }
+
       return updatedBlock;
     }),
 
@@ -193,6 +198,10 @@ export const blocksRouter = createTRPCRouter({
       });
 
       void notifyDocumentUpdated(block.document.id, nextVersion);
+
+      if (redis) {
+        await redis.del(`blocks:${block.document.id}:page:1`);
+      }
 
       return { success: true };
     }),
@@ -319,6 +328,10 @@ export const blocksRouter = createTRPCRouter({
 
       void notifyDocumentUpdated(input.documentId, nextVersion);
 
+      if (redis) {
+        await redis.del(`blocks:${input.documentId}:page:1`);
+      }
+
       return { success: true };
     }),
 
@@ -407,6 +420,10 @@ export const blocksRouter = createTRPCRouter({
       });
 
       void notifyDocumentUpdated(originalBlock.document.id, nextVersion);
+
+      if (redis) {
+        await redis.del(`blocks:${originalBlock.document.id}:page:1`);
+      }
 
       return duplicatedBlock;
     }),
