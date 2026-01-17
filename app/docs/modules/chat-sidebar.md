@@ -143,7 +143,7 @@
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "siliconflow-chat-model-id",
+        model: process.env.SILICONFLOW_MODEL ?? "Qwen/Qwen3-8B",
         messages,
         temperature: 0.7,
       }),

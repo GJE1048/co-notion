@@ -12,10 +12,14 @@ type Block = typeof blocks.$inferSelect;
 
 interface BlockEditorProps {
   blocks: Block[];
-  onBlockCreate: (block: Omit<Block, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  onBlockCreate: (block: Omit<Block, "id" | "createdAt" | "updatedAt">) => void;
   onBlockUpdate: (blockId: string, updates: Partial<Block>) => void;
   onBlockDelete: (blockId: string) => void;
-  onBlockCreateAfter?: (afterBlockId: string, block: Omit<Block, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  onBlockCreateAfter?: (
+    afterBlockId: string,
+    block: Omit<Block, "id" | "createdAt" | "updatedAt">
+  ) => void;
+  onBlockFocus?: (blockId: string) => void;
   readOnly?: boolean;
 }
 
@@ -24,11 +28,19 @@ interface BlockComponentProps {
   onUpdate: (updates: Partial<Block>) => void;
   onDelete: () => void;
   onCreateAfter?: (type: string) => void;
+  onFocus?: () => void;
   readOnly?: boolean;
 }
 
 // 单个 Block 组件
-const BlockComponent = ({ block, onUpdate, onDelete, onCreateAfter, readOnly }: BlockComponentProps) => {
+const BlockComponent = ({
+  block,
+  onUpdate,
+  onDelete,
+  onCreateAfter,
+  onFocus,
+  readOnly,
+}: BlockComponentProps) => {
   const [isEditing, setIsEditing] = useState(false);
 
   // 监听创建新块的全局事件
@@ -331,7 +343,13 @@ const BlockComponent = ({ block, onUpdate, onDelete, onCreateAfter, readOnly }: 
       )}
 
       {/* Block 内容 */}
-      <div className="px-2" onFocus={() => setIsEditing(false)}>
+      <div
+        className="px-2"
+        onFocus={() => {
+          setIsEditing(false);
+          onFocus?.();
+        }}
+      >
         {renderBlockContent()}
       </div>
 
@@ -411,6 +429,7 @@ export const BlockEditor = ({
   onBlockUpdate,
   onBlockDelete,
   onBlockCreateAfter,
+  onBlockFocus,
   readOnly = false
 }: BlockEditorProps) => {
   const sortedBlocks = [...blocks].sort((a, b) => a.position - b.position);
@@ -454,6 +473,7 @@ export const BlockEditor = ({
           onUpdate={(updates) => onBlockUpdate(block.id, updates)}
           onDelete={() => onBlockDelete(block.id)}
           onCreateAfter={(type) => handleCreateAfter(block.id, type)}
+          onFocus={() => onBlockFocus?.(block.id)}
           readOnly={readOnly}
         />
       ))}
