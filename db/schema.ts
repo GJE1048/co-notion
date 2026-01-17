@@ -67,6 +67,7 @@ export const documents = pgTable("documents",{
         team: true
     }),
     metadata: jsonb("metadata").default({}),
+    yjsState: text("yjs_state"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
 },(table)=>({

@@ -79,6 +79,8 @@ interface DocumentEditorProps {
 }
 
 export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProps) => {
+  const yBlocksRef = useRef<Y.Array<Y.Map<unknown>> | null>(null);
+
   const router = useRouter();
   const [title, setTitle] = useState(initialDocument.title);
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +117,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const updateBlockMutation = trpc.blocks.updateBlock.useMutation();
   const deleteBlockMutation = trpc.blocks.deleteBlock.useMutation();
   const updateDocumentMutation = trpc.documents.updateDocument.useMutation();
+  const saveYjsStateMutation = trpc.documents.saveYjsState.useMutation();
   const deleteDocumentMutation = trpc.documents.deleteDocument.useMutation({
     onSuccess: () => {
       router.push("/documents");
@@ -166,11 +169,75 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   >([]);
 
   const ydocRef = useRef<Y.Doc | null>(null);
-  const yBlocksRef = useRef<Y.Array<Y.Map<unknown>> | null>(null);
-
   const blocks = useMemo(
-    () => blocksData?.blocks || [],
-    [blocksData]
+    () => {
+      if (!blocksData?.blocks) {
+        return [];
+      }
+
+      if (yjsBlocksSnapshot.length === 0) {
+        return blocksData.blocks;
+      }
+
+      const textById = new Map<string, string>();
+      const orderIndex = new Map<string, number>();
+      yjsBlocksSnapshot.forEach((b, index) => {
+        textById.set(b.id, b.text);
+        orderIndex.set(b.id, index);
+      });
+
+      const withContent = blocksData.blocks.map((block) => {
+        const text = textById.get(block.id);
+        if (text === undefined) {
+          return block;
+        }
+
+        if (block.type === "code") {
+          type CodeContent = {
+            code?: {
+              content?: string;
+              language?: string;
+            };
+          };
+          const value = block.content as unknown as CodeContent;
+          const language = value.code?.language ?? "javascript";
+          return {
+            ...block,
+            content: {
+              code: {
+                content: text,
+                language,
+              },
+            } as unknown,
+          };
+        }
+
+        return {
+          ...block,
+          content: {
+            text: {
+              content: text,
+            },
+          } as unknown,
+        };
+      });
+
+      return withContent.slice().sort((a, b) => {
+        const ia = orderIndex.get(a.id);
+        const ib = orderIndex.get(b.id);
+        if (ia === undefined && ib === undefined) {
+          return a.position - b.position;
+        }
+        if (ia === undefined) {
+          return 1;
+        }
+        if (ib === undefined) {
+          return -1;
+        }
+        return ia - ib;
+      });
+    },
+    [blocksData, yjsBlocksSnapshot]
   );
   const isLoading = blocksLoading;
 
@@ -452,7 +519,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const handleBlockUpdate = useCallback(async (blockId: string, updates: Partial<Block>) => {
     try {
       setError(null);
-      
       utils.documents.getDocumentBlocksPage.setData(
         blocksQueryInput,
         (oldData) => {
@@ -467,13 +533,48 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
           };
         }
       );
-      
-      // 清除之前的定时器
+
+      if (updates.content && yBlocksRef.current && ydocRef.current) {
+        const yBlocks = yBlocksRef.current;
+        const array = yBlocks.toArray() as Y.Map<unknown>[];
+        const target = array.find((item) => item.get("id") === blockId);
+        if (target) {
+          const content = target.get("content");
+          const nextContent = updates.content as unknown;
+          if (content instanceof Y.Text) {
+            const value = (() => {
+              if (!nextContent || typeof nextContent !== "object") {
+                return "";
+              }
+              const v = nextContent as {
+                text?: {
+                  content?: string;
+                };
+                code?: {
+                  content?: string;
+                };
+              };
+              if (v.code && typeof v.code.content === "string") {
+                return v.code.content;
+              }
+              if (v.text && typeof v.text.content === "string") {
+                return v.text.content;
+              }
+              return "";
+            })();
+            content.delete(0, content.length);
+            if (value) {
+              content.insert(0, value);
+            }
+          }
+        }
+        return;
+      }
+
       if (updateTimeoutRef.current) {
         clearTimeout(updateTimeoutRef.current);
       }
-      
-      // 使用防抖来减少频繁的服务器请求
+
       updateTimeoutRef.current = setTimeout(async () => {
         try {
           const updatedBlock = await updateBlockMutation.mutateAsync({
@@ -488,7 +589,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
           await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
         }
         updateTimeoutRef.current = null;
-      }, 500); // 500ms 防抖
+      }, 500);
     } catch (err) {
       console.error('Failed to update block:', err);
       setError(err instanceof Error ? err.message : '更新 Block 失败');
@@ -521,6 +622,15 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     }
 
     const ydoc = new Y.Doc();
+
+    if (initialDocument.yjsState && typeof initialDocument.yjsState === "string") {
+      try {
+        const buffer = Buffer.from(initialDocument.yjsState, "base64");
+        const update = new Uint8Array(buffer);
+        Y.applyUpdate(ydoc, update);
+      } catch {
+      }
+    }
     const wsUrl =
       process.env.NEXT_PUBLIC_YJS_SERVER_WS_URL ||
       `ws://${window.location.hostname}:1234`;
@@ -530,6 +640,44 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
     ydocRef.current = ydoc;
     yBlocksRef.current = yBlocks;
+
+    let saveTimeout: number | null = null;
+    let updatesSinceLastPersist = 0;
+    let lastPersistAt = Date.now();
+
+    const handleYDocUpdate = () => {
+      if (!canEditDocument) {
+        return;
+      }
+
+      updatesSinceLastPersist += 1;
+
+      if (saveTimeout !== null) {
+        window.clearTimeout(saveTimeout);
+      }
+
+      const now = Date.now();
+      const isActive = updatesSinceLastPersist > 20 || now - lastPersistAt < 60000;
+      const delay = isActive ? 5000 : 15000;
+
+      saveTimeout = window.setTimeout(() => {
+        if (!ydocRef.current) {
+          return;
+        }
+
+        const update = Y.encodeStateAsUpdate(ydocRef.current);
+        const stateArray = Array.from(update);
+
+        void saveYjsStateMutation.mutateAsync({
+          documentId: initialDocument.id,
+          state: stateArray,
+        });
+        updatesSinceLastPersist = 0;
+        lastPersistAt = Date.now();
+      }, delay);
+    };
+
+    ydoc.on("update", handleYDocUpdate);
 
     const handleUpdate = () => {
       const array = yBlocks.toArray() as Y.Map<unknown>[];
@@ -559,13 +707,17 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     handleUpdate();
 
     return () => {
+      ydoc.off("update", handleYDocUpdate);
+      if (saveTimeout !== null) {
+        window.clearTimeout(saveTimeout);
+      }
       yBlocks.unobserve(handleUpdate);
       yBlocksRef.current = null;
       ydocRef.current = null;
       provider.destroy();
       ydoc.destroy();
     };
-  }, [initialDocument.id]);
+  }, [initialDocument.id, canEditDocument, saveYjsStateMutation]);
 
   useEffect(() => {
     if (typeof window === "undefined") {

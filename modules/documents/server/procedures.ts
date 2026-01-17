@@ -163,6 +163,7 @@ export const documentsRouter = createTRPCRouter({
           isArchived: documents.isArchived,
           permissions: documents.permissions,
           metadata: documents.metadata,
+          yjsState: documents.yjsState,
           createdAt: documents.createdAt,
           updatedAt: documents.updatedAt,
           workspace: {
@@ -1141,5 +1142,63 @@ export const documentsRouter = createTRPCRouter({
 
         return { sharedAsCollaborator: true };
       }
+    }),
+  saveYjsState: protectedProcedure
+    .input(z.object({
+      documentId: z.string(),
+      state: z.array(z.number().int().min(0).max(255)),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const [access] = await db
+        .select({
+          document: documents,
+          workspace: workspaces,
+          collaborator: documentCollaborators,
+          workspaceMember: workspaceMembers,
+        })
+        .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(and(
+          eq(documents.id, input.documentId),
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
+        ));
+
+      if (!access) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "文档不存在",
+        });
+      }
+
+      if (!canManageDocument(access, ctx.user.id)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "无权限保存文档状态",
+        });
+      }
+
+      const buffer = Buffer.from(new Uint8Array(input.state));
+      const base64 = buffer.toString("base64");
+
+      await db
+        .update(documents)
+        .set({
+          yjsState: base64,
+          updatedAt: new Date(),
+        })
+        .where(eq(documents.id, input.documentId));
+
+      if (redis) {
+        await redis.del(`doc:${input.documentId}`);
+      }
+
+      return { success: true };
     }),
 });
