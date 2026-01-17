@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { protectedProcedure, createTRPCRouter } from "@/trpc/init";
 import { db } from "@/db";
-import { documents, blocks, workspaces, operations, users, documentCollaborators } from "@/db/schema";
+import { documents, blocks, workspaces, operations, users, documentCollaborators, workspaceMembers } from "@/db/schema";
 import { eq, and, desc, asc, sql, gt, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
@@ -66,7 +66,13 @@ export const documentsRouter = createTRPCRouter({
         .from(documents)
         .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
         .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
-        .where(or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id)))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(or(
+          eq(documents.ownerId, ctx.user.id),
+          eq(documentCollaborators.userId, ctx.user.id),
+          eq(workspaces.ownerId, ctx.user.id),
+          eq(workspaceMembers.userId, ctx.user.id),
+        ))
         .orderBy(desc(documents.updatedAt));
 
       return userDocuments;
@@ -96,9 +102,15 @@ export const documentsRouter = createTRPCRouter({
         .from(documents)
         .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
         .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(documents.id, input.id),
-          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
         ));
 
       if (!document) {
@@ -173,10 +185,17 @@ export const documentsRouter = createTRPCRouter({
       const [existingDocument] = await db
         .select()
         .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
         .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(documents.id, input.id),
-          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
         ));
 
       if (!existingDocument) {
@@ -205,10 +224,17 @@ export const documentsRouter = createTRPCRouter({
       const [existingDocument] = await db
         .select()
         .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
         .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(documents.id, input.id),
-          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
         ));
 
       if (!existingDocument) {
@@ -237,10 +263,17 @@ export const documentsRouter = createTRPCRouter({
       const [document] = await db
         .select()
         .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
         .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(documents.id, input.documentId),
-          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
         ));
 
       if (!document) {
@@ -270,10 +303,17 @@ export const documentsRouter = createTRPCRouter({
       const [document] = await db
         .select()
         .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
         .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(documents.id, input.documentId),
-          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
         ));
 
       if (!document) {
@@ -451,10 +491,17 @@ export const documentsRouter = createTRPCRouter({
       const [document] = await db
         .select()
         .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
         .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(documents.id, input.documentId),
-          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
         ));
 
       if (!document) {
@@ -488,10 +535,17 @@ export const documentsRouter = createTRPCRouter({
       const [document] = await db
         .select()
         .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
         .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(documents.id, input.documentId),
-          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
         ));
 
       if (!document) {
@@ -523,6 +577,112 @@ export const documentsRouter = createTRPCRouter({
         operations: ops,
         latestVersion,
       };
+    }),
+
+  acceptDocumentInvite: protectedProcedure
+    .input(z.object({
+      documentId: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const [doc] = await db
+        .select()
+        .from(documents)
+        .where(eq(documents.id, input.documentId));
+
+      if (!doc) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "文档不存在" });
+      }
+
+      const [existing] = await db
+        .select()
+        .from(documentCollaborators)
+        .where(and(eq(documentCollaborators.documentId, input.documentId), eq(documentCollaborators.userId, ctx.user.id)));
+
+      if (existing) {
+        await db
+          .update(documentCollaborators)
+          .set({ role: "owner" })
+          .where(eq(documentCollaborators.id, existing.id));
+      } else {
+        await db
+          .insert(documentCollaborators)
+          .values({
+            documentId: input.documentId,
+            userId: ctx.user.id,
+            role: "owner",
+          });
+      }
+
+      return { mode: "collaborator", documentId: input.documentId };
+    }),
+
+  duplicateDocument: protectedProcedure
+    .input(z.object({
+      documentId: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const [doc] = await db
+        .select()
+        .from(documents)
+        .where(and(eq(documents.id, input.documentId), eq(documents.ownerId, ctx.user.id)));
+
+      if (!doc) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "文档不存在或无权限" });
+      }
+
+      let [personalWs] = await db
+        .select()
+        .from(workspaces)
+        .where(and(eq(workspaces.ownerId, ctx.user.id), eq(workspaces.isPersonal, true)))
+        .limit(1);
+
+      if (!personalWs) {
+        [personalWs] = await db
+          .insert(workspaces)
+          .values({
+            name: "我的工作区",
+            ownerId: ctx.user.id,
+            isPersonal: true,
+            permissions: { public: false, team: true },
+            metadata: {},
+          })
+          .returning();
+      }
+
+      const [newDoc] = await db
+        .insert(documents)
+        .values({
+          title: doc.title,
+          workspaceId: personalWs.id,
+          ownerId: ctx.user.id,
+          isTemplate: doc.isTemplate,
+          isArchived: false,
+          permissions: doc.permissions,
+          metadata: doc.metadata,
+        })
+        .returning();
+
+      const originalBlocks = await db
+        .select()
+        .from(blocks)
+        .where(eq(blocks.documentId, input.documentId));
+
+      if (originalBlocks.length > 0) {
+        for (const b of originalBlocks) {
+          await db.insert(blocks).values({
+            documentId: newDoc.id,
+            parentId: b.parentId,
+            type: b.type,
+            content: b.content,
+            properties: b.properties,
+            position: b.position,
+            version: 1,
+            createdBy: ctx.user.id,
+          });
+        }
+      }
+
+      return newDoc;
     }),
 
   shareDocumentToUser: protectedProcedure

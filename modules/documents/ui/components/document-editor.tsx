@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { Loader2, Save, ArrowLeft, Plus, Heading1, List, Code, Share } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Loader2, Save, ArrowLeft, Plus, Heading1, List, Code, Share, Copy, Trash2 } from "lucide-react";
 import { trpc } from "@/trpc/client";
 import { BlockEditor } from "./block-editor";
 import type { documents, blocks, operations as operationsTable } from "@/db/schema";
@@ -23,6 +24,10 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const [title, setTitle] = useState(initialDocument.title);
   const [error, setError] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [isHeadingPopoverOpen, setIsHeadingPopoverOpen] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [confirmCopyOpen, setConfirmCopyOpen] = useState(false);
+  const [inviteLink, setInviteLink] = useState("");
 
   // 使用 tRPC 获取文档 blocks（开发模式下使用绕过认证的查询）
   const {
@@ -38,7 +43,16 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const updateBlockMutation = trpc.blocks.updateBlock.useMutation();
   const deleteBlockMutation = trpc.blocks.deleteBlock.useMutation();
   const updateDocumentMutation = trpc.documents.updateDocument.useMutation();
-  const shareDocumentMutation = trpc.documents.shareDocumentToUser.useMutation();
+  const deleteDocumentMutation = trpc.documents.deleteDocument.useMutation({
+    onSuccess: () => {
+      router.push("/documents");
+    },
+  });
+  const duplicateDocumentMutation = trpc.documents.duplicateDocument.useMutation({
+    onSuccess: (newDocument) => {
+      router.push(`/documents/${newDocument.id}`);
+    },
+  });
 
   const blocks = blocksData?.blocks || [];
   const isLoading = blocksLoading;
@@ -90,9 +104,8 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
   const isSaving = updateDocumentMutation.isPending;
   const [isShareOpen, setIsShareOpen] = useState(false);
-  const [targetUsername, setTargetUsername] = useState("");
-  const [copyToPersonal, setCopyToPersonal] = useState(true);
-  const isSharing = shareDocumentMutation.isPending;
+  const isDeletingDocument = deleteDocumentMutation.isPending;
+  const isDuplicatingDocument = duplicateDocumentMutation.isPending;
 
   // Block 操作处理函数
   const handleBlockCreate = useCallback(async (blockData: Omit<Block, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -371,6 +384,26 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
             </span>
           )}
           <Button
+            onClick={() => setConfirmCopyOpen(true)}
+            disabled={isLoading}
+            size="sm"
+            variant="outline"
+            className="flex items-center gap-2"
+          >
+            <Copy className="size-4" />
+            复制
+          </Button>
+          <Button
+            onClick={() => setConfirmDeleteOpen(true)}
+            disabled={isLoading}
+            size="sm"
+            variant="destructive"
+            className="flex items-center gap-2"
+          >
+            <Trash2 className="size-4" />
+            删除
+          </Button>
+          <Button
             onClick={() => setIsShareOpen(true)}
             disabled={isLoading}
             size="sm"
@@ -466,28 +499,87 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
                     <Plus className="size-4 mr-1" />
                     段落
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      const maxPosition = blocks.length > 0 
-                        ? Math.max(...blocks.map(b => b.position)) 
-                        : -1;
-                      await handleBlockCreate({
-                        documentId: initialDocument.id,
-                        parentId: null,
-                        type: 'heading_1',
-                        content: { text: { content: '' } },
-                        properties: {},
-                        position: maxPosition + 1,
-                        version: 1,
-                        createdBy: '',
-                      });
-                    }}
-                  >
-                    <Heading1 className="size-4 mr-1" />
-                    标题
-                  </Button>
+                  <div className="relative inline-block">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      onClick={() => setIsHeadingPopoverOpen((open) => !open)}
+                    >
+                      <Heading1 className="size-4 mr-1" />
+                      标题
+                    </Button>
+                    {isHeadingPopoverOpen && (
+                      <div className="absolute z-20 mt-2 w-40 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-md py-1">
+                        <button
+                          type="button"
+                          className="w-full px-3 py-1.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          onClick={async () => {
+                            const maxPosition = blocks.length > 0
+                              ? Math.max(...blocks.map(b => b.position))
+                              : -1;
+                            await handleBlockCreate({
+                              documentId: initialDocument.id,
+                              parentId: null,
+                              type: 'heading_1',
+                              content: { text: { content: '' } },
+                              properties: {},
+                              position: maxPosition + 1,
+                              version: 1,
+                              createdBy: '',
+                            });
+                            setIsHeadingPopoverOpen(false);
+                          }}
+                        >
+                          H1 标题
+                        </button>
+                        <button
+                          type="button"
+                          className="w-full px-3 py-1.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          onClick={async () => {
+                            const maxPosition = blocks.length > 0
+                              ? Math.max(...blocks.map(b => b.position))
+                              : -1;
+                            await handleBlockCreate({
+                              documentId: initialDocument.id,
+                              parentId: null,
+                              type: 'heading_2',
+                              content: { text: { content: '' } },
+                              properties: {},
+                              position: maxPosition + 1,
+                              version: 1,
+                              createdBy: '',
+                            });
+                            setIsHeadingPopoverOpen(false);
+                          }}
+                        >
+                          H2 标题
+                        </button>
+                        <button
+                          type="button"
+                          className="w-full px-3 py-1.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          onClick={async () => {
+                            const maxPosition = blocks.length > 0
+                              ? Math.max(...blocks.map(b => b.position))
+                              : -1;
+                            await handleBlockCreate({
+                              documentId: initialDocument.id,
+                              parentId: null,
+                              type: 'heading_3',
+                              content: { text: { content: '' } },
+                              properties: {},
+                              position: maxPosition + 1,
+                              version: 1,
+                              createdBy: '',
+                            });
+                            setIsHeadingPopoverOpen(false);
+                          }}
+                        >
+                          H3 标题
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <Button
                     variant="outline"
                     size="sm"
@@ -548,65 +640,135 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
             )}
             <div className="space-y-4">
               <div>
-                <label className="text-sm text-slate-600 dark:text-slate-300">目标用户名</label>
-                <Input
-                  value={targetUsername}
-                  onChange={(e) => setTargetUsername(e.target.value)}
-                  placeholder="输入对方的用户名"
-                  className="mt-1"
-                  disabled={isSharing}
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  id="copy-to-personal"
-                  type="checkbox"
-                  checked={copyToPersonal}
-                  onChange={(e) => setCopyToPersonal(e.target.checked)}
-                  disabled={isSharing}
-                />
-                <label htmlFor="copy-to-personal" className="text-sm text-slate-700 dark:text-slate-300">
-                  复制到对方“我的文档”并成为所有者
+                <label className="text-sm text-slate-600 dark:text-slate-300">
+                  分享链接
                 </label>
+                <Input
+                  value={inviteLink}
+                  readOnly
+                  placeholder="点击下方按钮生成分享链接"
+                  className="mt-1"
+                />
               </div>
               <div className="flex justify-end gap-2 pt-2">
-                <Button variant="outline" onClick={() => setIsShareOpen(false)} disabled={isSharing}>
+                <Button variant="outline" onClick={() => setIsShareOpen(false)}>
                   取消
                 </Button>
                 <Button
-                  onClick={async () => {
-                    try {
-                      setError(null);
-                      const res = await shareDocumentMutation.mutateAsync({
-                        documentId: initialDocument.id,
-                        targetUsername: targetUsername.trim(),
-                        copyToPersonal,
-                      });
-                      setIsShareOpen(false);
-                      setTargetUsername("");
-                      if (res?.newDocumentId || res?.sharedAsCollaborator) {
-                        setLastSaved(new Date());
-                      }
-                    } catch (err) {
-                      setError(err instanceof Error ? err.message : "分享失败");
+                  onClick={() => {
+                    if (typeof window === "undefined") return;
+                    const url = new URL(window.location.href);
+                    url.pathname = "/invite/document";
+                    url.searchParams.set("documentId", initialDocument.id);
+                    const link = url.toString();
+                    setInviteLink(link);
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                      navigator.clipboard.writeText(link).catch(() => {});
                     }
                   }}
-                  disabled={isSharing || !targetUsername.trim()}
                 >
-                  {isSharing ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin mr-2" />
-                      发送中...
-                    </>
-                  ) : (
-                    "发送邀请"
-                  )}
+                  生成并复制链接
                 </Button>
               </div>
             </div>
           </div>
         </div>
       )}
+
+      <Dialog
+        open={confirmDeleteOpen}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingDocument) {
+            setConfirmDeleteOpen(false);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>删除文档</DialogTitle>
+            <DialogDescription>
+              删除后将无法在文档列表中看到该文档，是否确认删除？
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmDeleteOpen(false)}
+              disabled={isDeletingDocument}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={async () => {
+                try {
+                  await deleteDocumentMutation.mutateAsync({ id: initialDocument.id });
+                } catch {
+                }
+              }}
+              disabled={isDeletingDocument}
+            >
+              {isDeletingDocument ? (
+                <>
+                  <Loader2 className="size-4 animate-spin mr-2" />
+                  删除中...
+                </>
+              ) : (
+                "确认删除"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={confirmCopyOpen}
+        onOpenChange={(open) => {
+          if (!open && !isDuplicatingDocument) {
+            setConfirmCopyOpen(false);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>复制文档</DialogTitle>
+            <DialogDescription>
+              将在“我的文档”中创建该文档的副本，是否继续？
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmCopyOpen(false)}
+              disabled={isDuplicatingDocument}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              onClick={async () => {
+                try {
+                  await duplicateDocumentMutation.mutateAsync({ documentId: initialDocument.id });
+                } catch {
+                }
+              }}
+              disabled={isDuplicatingDocument}
+            >
+              {isDuplicatingDocument ? (
+                <>
+                  <Loader2 className="size-4 animate-spin mr-2" />
+                  复制中...
+                </>
+              ) : (
+                "确认复制"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

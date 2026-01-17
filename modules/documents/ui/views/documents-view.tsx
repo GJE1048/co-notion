@@ -5,17 +5,22 @@ import Link from "next/link";
 import { trpc } from "@/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Loader2, FileText, Plus, FolderPlus } from "lucide-react";
+import { Loader2, FileText, Plus, FolderPlus, MoreHorizontal } from "lucide-react";
 
 export const DocumentsView = () => {
   const [isCreateWorkspaceDialogOpen, setIsCreateWorkspaceDialogOpen] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
   const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [inviteUsername, setInviteUsername] = useState("");
   const [inviteWorkspaceId, setInviteWorkspaceId] = useState<string>("");
   const [inviteRole, setInviteRole] = useState<"admin" | "editor" | "viewer">("admin");
+  const [inviteLink, setInviteLink] = useState("");
+  const [isCreateDocumentDialogOpen, setIsCreateDocumentDialogOpen] = useState(false);
+  const [newDocumentWorkspaceId, setNewDocumentWorkspaceId] = useState<string>("");
+  const [activeDocumentMenuId, setActiveDocumentMenuId] = useState<string | null>(null);
+  const [confirmDeleteDocumentId, setConfirmDeleteDocumentId] = useState<string | null>(null);
+  const [confirmCopyDocumentId, setConfirmCopyDocumentId] = useState<string | null>(null);
 
   const {
     data: documents,
@@ -24,10 +29,23 @@ export const DocumentsView = () => {
   } = trpc.documents.getUserDocuments.useQuery();
 
   const { data: workspaces } = trpc.workspaces.getUserWorkspaces.useQuery();
+  const utils = trpc.useUtils();
 
   const createDocumentMutation = trpc.documents.createDocument.useMutation({
     onSuccess: (newDocument) => {
       // 重定向到新创建的文档
+      window.location.href = `/documents/${newDocument.id}`;
+    },
+  });
+
+  const deleteDocumentMutation = trpc.documents.deleteDocument.useMutation({
+    onSuccess: async () => {
+      await utils.documents.getUserDocuments.invalidate();
+    },
+  });
+
+  const duplicateDocumentMutation = trpc.documents.duplicateDocument.useMutation({
+    onSuccess: (newDocument) => {
       window.location.href = `/documents/${newDocument.id}`;
     },
   });
@@ -40,17 +58,16 @@ export const DocumentsView = () => {
       window.location.reload();
     },
   });
-  const inviteWorkspaceMutation = trpc.workspaces.inviteUserToWorkspace.useMutation({
-    onSuccess: () => {
-      setIsInviteOpen(false);
-      setInviteUsername("");
-      setInviteWorkspaceId("");
-    },
-  });
 
-  const handleCreateDocument = () => {
+  const handleOpenCreateDocumentDialog = () => {
+    setNewDocumentWorkspaceId("");
+    setIsCreateDocumentDialogOpen(true);
+  };
+
+  const handleConfirmCreateDocument = () => {
     createDocumentMutation.mutate({
       title: "未命名文档",
+      workspaceId: newDocumentWorkspaceId || undefined,
     });
   };
 
@@ -64,6 +81,20 @@ export const DocumentsView = () => {
     });
   };
 
+  const handleGenerateInviteLink = () => {
+    if (!inviteWorkspaceId) return;
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.pathname = "/invite/workspace";
+    url.searchParams.set("workspaceId", inviteWorkspaceId);
+    url.searchParams.set("role", inviteRole);
+    const fullLink = url.toString();
+    setInviteLink(fullLink);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(fullLink).catch(() => {});
+    }
+  };
+
   const workspaceGroups = useMemo(() => {
     if (!workspaces || workspaces.length === 0) {
       if (!documents || documents.length === 0) return [];
@@ -72,6 +103,7 @@ export const DocumentsView = () => {
           workspaceId: null as string | null,
           workspaceName: "我的文档",
           isPersonal: true,
+          workspaceRole: "creator",
           documents,
         },
       ];
@@ -83,13 +115,14 @@ export const DocumentsView = () => {
       workspaceId: ws.id as string | null,
       workspaceName: ws.name,
       isPersonal: ws.isPersonal,
+      workspaceRole: ws.userRole,
       documents: allDocuments.filter((doc) => doc.workspace?.id === ws.id),
     }));
 
     const unassignedDocuments = allDocuments.filter((doc) => !doc.workspace?.id);
     if (unassignedDocuments.length > 0) {
       groups.unshift({
-        workspaceId: null,
+        workspaceId: null as string | null,
         workspaceName: "未分配工作区",
         isPersonal: false,
         documents: unassignedDocuments,
@@ -104,6 +137,11 @@ export const DocumentsView = () => {
 
     return groups;
   }, [documents, workspaces]);
+
+  const nonPersonalWorkspaces = (workspaces || []).filter((ws) => !ws.isPersonal);
+
+  const isDeletingDocument = deleteDocumentMutation.isPending;
+  const isDuplicatingDocument = duplicateDocumentMutation.isPending;
 
   if (error) {
     return (
@@ -186,7 +224,7 @@ export const DocumentsView = () => {
           </Dialog>
 
           <Button
-            onClick={handleCreateDocument}
+            onClick={handleOpenCreateDocumentDialog}
             disabled={createDocumentMutation.isPending}
             className="flex items-center gap-2"
           >
@@ -205,25 +243,13 @@ export const DocumentsView = () => {
               <DialogHeader>
                 <DialogTitle>邀请用户到工作区</DialogTitle>
               </DialogHeader>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!inviteUsername.trim() || !inviteWorkspaceId) return;
-                  inviteWorkspaceMutation.mutate({
-                    workspaceId: inviteWorkspaceId,
-                    targetUsername: inviteUsername.trim(),
-                    role: inviteRole,
-                  });
-                }}
-                className="space-y-4"
-              >
+              <div className="space-y-4">
                 <div>
                   <label className="text-sm font-medium text-slate-700 dark:text-slate-300">选择工作区</label>
                   <select
                     className="mt-1 w-full border rounded-md p-2 bg-white dark:bg-slate-900"
                     value={inviteWorkspaceId}
                     onChange={(e) => setInviteWorkspaceId(e.target.value)}
-                    disabled={inviteWorkspaceMutation.isPending}
                   >
                     <option value="">请选择</option>
                     {(workspaces || []).map((ws) => (
@@ -234,50 +260,46 @@ export const DocumentsView = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">用户名</label>
-                  <Input
-                    type="text"
-                    placeholder="输入用户名"
-                    value={inviteUsername}
-                    onChange={(e) => setInviteUsername(e.target.value)}
-                    disabled={inviteWorkspaceMutation.isPending}
-                    className="mt-1"
-                  />
-                </div>
-                <div>
                   <label className="text-sm font-medium text-slate-700 dark:text-slate-300">权限</label>
                   <select
                     className="mt-1 w-full border rounded-md p-2 bg-white dark:bg-slate-900"
                     value={inviteRole}
                     onChange={(e) => setInviteRole(e.target.value as "admin" | "editor" | "viewer")}
-                    disabled={inviteWorkspaceMutation.isPending}
                   >
                     <option value="admin">管理员</option>
                     <option value="editor">编辑者</option>
                     <option value="viewer">查看者</option>
                   </select>
                 </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    邀请链接
+                  </label>
+                  <Input
+                    type="text"
+                    readOnly
+                    value={inviteLink}
+                    placeholder="先选择工作区和权限，然后生成邀请链接"
+                    className="mt-1"
+                  />
+                </div>
                 <div className="flex items-center justify-end gap-3 pt-4">
                   <Button
                     type="button"
                     variant="outline"
                     onClick={() => setIsInviteOpen(false)}
-                    disabled={inviteWorkspaceMutation.isPending}
                   >
                     取消
                   </Button>
-                  <Button type="submit" disabled={inviteWorkspaceMutation.isPending || !inviteWorkspaceId || !inviteUsername.trim()}>
-                    {inviteWorkspaceMutation.isPending ? (
-                      <>
-                        <Loader2 className="size-4 animate-spin mr-2" />
-                        发送中...
-                      </>
-                    ) : (
-                      "发送邀请"
-                    )}
+                  <Button
+                    type="button"
+                    disabled={!inviteWorkspaceId}
+                    onClick={handleGenerateInviteLink}
+                  >
+                    生成并复制链接
                   </Button>
                 </div>
-              </form>
+              </div>
             </DialogContent>
           </Dialog>
         </div>
@@ -299,7 +321,7 @@ export const DocumentsView = () => {
               从一个空白文档开始，或者回到首页选择一个模板。
             </p>
             <Button
-              onClick={handleCreateDocument}
+              onClick={handleOpenCreateDocumentDialog}
               disabled={createDocumentMutation.isPending}
               className="flex items-center gap-2"
             >
@@ -320,9 +342,13 @@ export const DocumentsView = () => {
                 <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
                   {group.isPersonal ? "我的文档" : group.workspaceName}
                 </h2>
-                {!group.isPersonal && (
+                {!group.isPersonal && group.workspaceRole && (
                   <span className="text-xs text-slate-500 dark:text-slate-400">
-                    {group.workspaceName}
+                    {group.workspaceRole === "creator"
+                      ? "创建者"
+                      : group.workspaceRole === "admin"
+                      ? "管理员"
+                      : "查看者"}
                   </span>
                 )}
               </div>
@@ -335,29 +361,74 @@ export const DocumentsView = () => {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {group.documents.map((doc) => (
-                    <Link
+                    <Card
                       key={doc.id}
-                      href={`/documents/${doc.id}`}
-                      className="group"
+                      className="group relative h-full border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60 hover:border-slate-300 dark:hover:border-slate-700 hover:shadow-sm transition-all"
                     >
-                      <Card className="h-full border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60 hover:border-slate-300 dark:hover:border-slate-700 hover:shadow-sm transition-all">
-                        <CardContent className="p-4">
-                          <h3 className="font-medium text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 line-clamp-2">
-                            {doc.title || "未命名文档"}
-                          </h3>
-                          <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                            <span>
-                              更新时间：{new Date(doc.updatedAt).toLocaleDateString()}
-                            </span>
-                            {doc.workspace && (
-                              <span className="text-slate-400 dark:text-slate-500">
-                                {doc.workspace.name}
+                      <CardContent className="p-4">
+                        <div className="flex items-start justify-between gap-2">
+                          <Link
+                            href={`/documents/${doc.id}`}
+                            className="flex-1"
+                          >
+                            <h3 className="font-medium text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 line-clamp-2">
+                              {doc.title || "未命名文档"}
+                            </h3>
+                            <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                              <span>
+                                更新时间：{new Date(doc.updatedAt).toLocaleDateString()}
                               </span>
-                            )}
+                              {doc.workspace && (
+                                <span className="text-slate-400 dark:text-slate-500">
+                                  {doc.workspace.name}
+                                </span>
+                              )}
+                            </div>
+                          </Link>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setActiveDocumentMenuId((current) =>
+                                current === doc.id ? null : doc.id
+                              );
+                            }}
+                          >
+                            <MoreHorizontal className="size-4" />
+                          </Button>
+                        </div>
+                        {activeDocumentMenuId === doc.id && (
+                          <div className="absolute top-2 right-2 z-20 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-md py-1 min-w-[140px]">
+                            <button
+                              type="button"
+                              className="w-full px-3 py-1.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                              onClick={() => {
+                                setConfirmCopyDocumentId(doc.id);
+                                setActiveDocumentMenuId(null);
+                              }}
+                              disabled={isDuplicatingDocument}
+                            >
+                              复制
+                            </button>
+                            <button
+                              type="button"
+                              className="w-full px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+                              onClick={() => {
+                                setConfirmDeleteDocumentId(doc.id);
+                                setActiveDocumentMenuId(null);
+                              }}
+                              disabled={isDeletingDocument}
+                            >
+                              删除
+                            </button>
                           </div>
-                        </CardContent>
-                      </Card>
-                    </Link>
+                        )}
+                      </CardContent>
+                    </Card>
                   ))}
                 </div>
               )}
@@ -365,6 +436,167 @@ export const DocumentsView = () => {
           ))}
         </div>
       )}
+
+      <Dialog
+        open={isCreateDocumentDialogOpen}
+        onOpenChange={(open) => {
+          if (!createDocumentMutation.isPending) {
+            setIsCreateDocumentDialogOpen(open);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>选择工作区</DialogTitle>
+            <DialogDescription>
+              请选择新文档要放入的工作区，默认放入“我的文档”。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                工作区
+              </label>
+              <select
+                className="mt-1 w-full border rounded-md p-2 bg-white dark:bg-slate-900"
+                value={newDocumentWorkspaceId}
+                onChange={(e) => setNewDocumentWorkspaceId(e.target.value)}
+                disabled={createDocumentMutation.isPending}
+              >
+                <option value="">我的文档</option>
+                {nonPersonalWorkspaces.map((ws) => (
+                  <option key={ws.id} value={ws.id as string}>
+                    {ws.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <DialogFooter className="pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsCreateDocumentDialogOpen(false)}
+              disabled={createDocumentMutation.isPending}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              onClick={handleConfirmCreateDocument}
+              disabled={createDocumentMutation.isPending}
+            >
+              {createDocumentMutation.isPending ? (
+                <>
+                  <Loader2 className="size-4 animate-spin mr-2" />
+                  创建中...
+                </>
+              ) : (
+                "创建文档"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!confirmDeleteDocumentId}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmDeleteDocumentId(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>删除文档</DialogTitle>
+            <DialogDescription>
+              删除后将无法在文档列表中看到该文档，是否确认删除？
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmDeleteDocumentId(null)}
+              disabled={isDeletingDocument}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={async () => {
+                if (!confirmDeleteDocumentId) return;
+                try {
+                  await deleteDocumentMutation.mutateAsync({ id: confirmDeleteDocumentId });
+                  setConfirmDeleteDocumentId(null);
+                } catch {
+                }
+              }}
+              disabled={isDeletingDocument}
+            >
+              {isDeletingDocument ? (
+                <>
+                  <Loader2 className="size-4 animate-spin mr-2" />
+                  删除中...
+                </>
+              ) : (
+                "确认删除"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!confirmCopyDocumentId}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmCopyDocumentId(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>复制文档</DialogTitle>
+            <DialogDescription>
+              将在“我的文档”中创建该文档的副本，是否继续？
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmCopyDocumentId(null)}
+              disabled={isDuplicatingDocument}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              onClick={async () => {
+                if (!confirmCopyDocumentId) return;
+                try {
+                  await duplicateDocumentMutation.mutateAsync({ documentId: confirmCopyDocumentId });
+                  setConfirmCopyDocumentId(null);
+                } catch {
+                }
+              }}
+              disabled={isDuplicatingDocument}
+            >
+              {isDuplicatingDocument ? (
+                <>
+                  <Loader2 className="size-4 animate-spin mr-2" />
+                  复制中...
+                </>
+              ) : (
+                "确认复制"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
