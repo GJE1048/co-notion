@@ -184,7 +184,7 @@ export const blocksRouter = createTRPCRouter({
 
       await db.insert(operations).values({
         documentId: block.document.id,
-        blockId: block.block.id,
+        blockId: null,
         type: "delete_block",
         payload: { blockId: input.id } as Record<string, unknown>,
         clientId: input.clientId ?? ctx.user.id,
