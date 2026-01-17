@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { documents, blocks, workspaces, operations, users, documentCollaborators, workspaceMembers } from "@/db/schema";
 import { eq, and, desc, asc, sql, gt, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { notifyDocumentUpdated } from "@/realtime/notify";
 
 // Schema definitions
 const createDocumentSchema = z.object({
@@ -94,6 +95,23 @@ export const documentsRouter = createTRPCRouter({
         .orderBy(desc(documents.updatedAt));
 
       return userDocuments;
+    }),
+
+  getCurrentUserProfile: protectedProcedure
+    .query(async ({ ctx }) => {
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, ctx.user.id));
+
+      if (!user) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "用户不存在",
+        });
+      }
+
+      return user;
     }),
 
   // 获取单个文档详情
@@ -519,6 +537,8 @@ export const documentsRouter = createTRPCRouter({
         userId: ctx.user.id,
         version: nextVersion,
       });
+
+      void notifyDocumentUpdated(input.documentId, nextVersion);
 
       return newBlock;
     }),

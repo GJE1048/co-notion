@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev:all": "concurrently \"npm run dev:webhook\" \"npm run dev\" ",
+    "dev:all": "concurrently \"npm run dev:webhook\" \"npm run dev\" \"npm run dev:ws\"",
     "dev": "next dev",
     "dev:webhook": "ngrok http --url=intershop-hymnless-jena.ngrok-free.dev 3000",
     "build": "next build",
@@ -26,6 +26,7 @@
     "test:psql": "tsx scripts/test-psql.ts",
     "test:connection": "tsx scripts/test-connection.ts",
     "test:compare": "tsx scripts/compare-connections.ts",
+    "dev:ws": "tsx scripts/ws-server.ts",
     "clear:clerk": "node scripts/clear-clerk-session.js"
   },
   "dependencies": {
@@ -41,6 +42,7 @@
     "@trpc/server": "11.0.0-rc.730",
     "@upstash/ratelimit": "2.0.5",
     "@upstash/redis": "^v1.35.8",
+    "ws": "^8.18.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "concurrently": "^9.1.2",

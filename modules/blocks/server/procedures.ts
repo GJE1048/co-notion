@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { blocks, documents, operations, documentCollaborators, workspaces, workspaceMembers } from "@/db/schema";
 import { eq, and, desc, sql, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { notifyDocumentUpdated } from "@/realtime/notify";
 
 export const blocksRouter = createTRPCRouter({
   // 获取单个 Block 详情
@@ -126,6 +127,8 @@ export const blocksRouter = createTRPCRouter({
         version: nextVersion,
       });
 
+      void notifyDocumentUpdated(block.document.id, nextVersion);
+
       return updatedBlock;
     }),
 
@@ -188,6 +191,8 @@ export const blocksRouter = createTRPCRouter({
         userId: ctx.user.id,
         version: nextVersion,
       });
+
+      void notifyDocumentUpdated(block.document.id, nextVersion);
 
       return { success: true };
     }),
@@ -312,6 +317,8 @@ export const blocksRouter = createTRPCRouter({
         version: nextVersion,
       });
 
+      void notifyDocumentUpdated(input.documentId, nextVersion);
+
       return { success: true };
     }),
 
@@ -398,6 +405,8 @@ export const blocksRouter = createTRPCRouter({
         userId: ctx.user.id,
         version: nextVersion,
       });
+
+      void notifyDocumentUpdated(originalBlock.document.id, nextVersion);
 
       return duplicatedBlock;
     }),

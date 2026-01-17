@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,8 +66,14 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const documentOwner = documentMembers.find((m) => m.isDocumentOwner);
   const visibleMembers = documentMembers.slice(0, 5);
   const extraMemberCount = documentMembers.length - visibleMembers.length;
+  const { data: currentUser } = trpc.documents.getCurrentUserProfile.useQuery();
+  const [onlineUsernames, setOnlineUsernames] = useState<string[]>([]);
+  const hasPresence = onlineUsernames.length > 0;
 
-  const blocks = blocksData?.blocks || [];
+  const blocks = useMemo(
+    () => blocksData?.blocks || [],
+    [blocksData]
+  );
   const isLoading = blocksLoading;
 
   const utils = trpc.useUtils();
@@ -90,6 +96,111 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
   const currentVersionRef = useRef(0);
   const hasInitializedVersionRef = useRef(false);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const fetchOperations = useCallback(async () => {
+    if (!blocksData || blocksLoading) {
+      return;
+    }
+
+    try {
+      const result = await utils.documents.getDocumentOperations.fetch({
+        documentId: initialDocument.id,
+        sinceVersion: currentVersionRef.current,
+      });
+
+      if (!result) {
+        return;
+      }
+
+      if (!hasInitializedVersionRef.current) {
+        hasInitializedVersionRef.current = true;
+        currentVersionRef.current = result.latestVersion;
+        return;
+      }
+
+      if (!result.operations.length) {
+        currentVersionRef.current = result.latestVersion;
+        return;
+      }
+
+      utils.dev.getDocumentBlocks.setData(
+        { documentId: initialDocument.id },
+        (oldData) => {
+          if (!oldData) {
+            return oldData;
+          }
+
+          let updatedBlocks = [...oldData.blocks];
+
+          for (const op of result.operations as Operation[]) {
+            if (!op) continue;
+            if (op.clientId && op.clientId === clientId) continue;
+
+            if (op.type === "create_block") {
+              const payloadBlock = op.payload as unknown as Block | undefined;
+              if (!payloadBlock) continue;
+              const exists = updatedBlocks.some((block) => block.id === payloadBlock.id);
+              if (!exists) {
+                updatedBlocks.push(payloadBlock);
+              }
+              continue;
+            }
+
+            if (op.type === "update_block") {
+              updatedBlocks = updatedBlocks.map((block) =>
+                block.id === op.blockId
+                  ? {
+                      ...block,
+                      ...(op.payload as unknown as Partial<Block>),
+                      updatedAt: op.timestamp ?? block.updatedAt,
+                    }
+                  : block
+              );
+              continue;
+            }
+
+            if (op.type === "delete_block") {
+              updatedBlocks = updatedBlocks.filter((block) => block.id !== op.blockId);
+              continue;
+            }
+
+            if (op.type === "reorder_blocks") {
+              const payload = op.payload as unknown as {
+                blockUpdates?: { id: string; position: number }[];
+              } | null;
+
+              if (payload && Array.isArray(payload.blockUpdates)) {
+                const positionMap = new Map<string, number>();
+                for (const update of payload.blockUpdates) {
+                  positionMap.set(update.id, update.position);
+                }
+
+                updatedBlocks = updatedBlocks.map((block) =>
+                  positionMap.has(block.id)
+                    ? {
+                        ...block,
+                        position: positionMap.get(block.id) ?? block.position,
+                        updatedAt: op.timestamp ?? block.updatedAt,
+                      }
+                    : block
+                );
+              }
+            }
+          }
+
+          return {
+            ...oldData,
+            blocks: updatedBlocks,
+          };
+        }
+      );
+
+      currentVersionRef.current = result.latestVersion;
+    } catch (err) {
+      console.error("Failed to fetch document operations:", err);
+    }
+  }, [blocksData, blocksLoading, utils, initialDocument.id, clientId]);
 
   const handleSave = useCallback(async () => {
     try {
@@ -234,123 +345,91 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   }, [deleteBlockMutation, utils, initialDocument.id, clientId]);
 
   useEffect(() => {
-    if (!blocksData || blocksLoading) {
+    void fetchOperations();
+  }, [fetchOperations]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (!currentUser?.username) {
       return;
     }
 
-    let cancelled = false;
+    const wsUrl = process.env.NEXT_PUBLIC_REALTIME_SERVER_WS_URL || `ws://${window.location.hostname}:4000/ws`;
+    let closed = false;
 
-    const poll = async () => {
-      try {
-        const result = await utils.documents.getDocumentOperations.fetch({
-          documentId: initialDocument.id,
-          sinceVersion: currentVersionRef.current,
-        });
-
-        if (!result || cancelled) {
-          return;
-        }
-
-        if (!hasInitializedVersionRef.current) {
-          hasInitializedVersionRef.current = true;
-          currentVersionRef.current = result.latestVersion;
-          return;
-        }
-
-        if (!result.operations.length) {
-          currentVersionRef.current = result.latestVersion;
-          return;
-        }
-
-        utils.dev.getDocumentBlocks.setData(
-          { documentId: initialDocument.id },
-          (oldData) => {
-            if (!oldData) {
-              return oldData;
-            }
-
-            let updatedBlocks = [...oldData.blocks];
-
-            for (const op of result.operations as Operation[]) {
-              if (!op) continue;
-              if (op.clientId && op.clientId === clientId) continue;
-
-              if (op.type === "create_block") {
-                const payloadBlock = op.payload as unknown as Block | undefined;
-                if (!payloadBlock) continue;
-                const exists = updatedBlocks.some((block) => block.id === payloadBlock.id);
-                if (!exists) {
-                  updatedBlocks.push(payloadBlock);
-                }
-                continue;
-              }
-
-              if (op.type === "update_block") {
-                updatedBlocks = updatedBlocks.map((block) =>
-                  block.id === op.blockId
-                    ? {
-                        ...block,
-                        ...(op.payload as unknown as Partial<Block>),
-                        updatedAt: op.timestamp ?? block.updatedAt,
-                      }
-                    : block
-                );
-                continue;
-              }
-
-              if (op.type === "delete_block") {
-                updatedBlocks = updatedBlocks.filter((block) => block.id !== op.blockId);
-                continue;
-              }
-
-              if (op.type === "reorder_blocks") {
-                const payload = op.payload as unknown as {
-                  blockUpdates?: { id: string; position: number }[];
-                } | null;
-
-                if (payload && Array.isArray(payload.blockUpdates)) {
-                  const positionMap = new Map<string, number>();
-                  for (const update of payload.blockUpdates) {
-                    positionMap.set(update.id, update.position);
-                  }
-
-                  updatedBlocks = updatedBlocks.map((block) =>
-                    positionMap.has(block.id)
-                      ? {
-                          ...block,
-                          position: positionMap.get(block.id) ?? block.position,
-                          updatedAt: op.timestamp ?? block.updatedAt,
-                        }
-                      : block
-                  );
-                }
-              }
-            }
-
-            return {
-              ...oldData,
-              blocks: updatedBlocks,
-            };
-          }
-        );
-
-        currentVersionRef.current = result.latestVersion;
-      } catch (err) {
-        console.error("Failed to fetch document operations:", err);
+    const connect = () => {
+      if (closed) {
+        return;
       }
+
+      const socket = new WebSocket(wsUrl);
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        socket.send(JSON.stringify({
+          type: "join_document",
+          documentId: initialDocument.id,
+          username: currentUser.username,
+        }));
+      };
+
+      socket.onmessage = (event) => {
+        let payload: unknown;
+        try {
+          payload = JSON.parse(event.data as string);
+        } catch {
+          return;
+        }
+
+        if (!payload || typeof payload !== "object") {
+          return;
+        }
+
+        const msg = payload as {
+          type?: string;
+          documentId?: string;
+          onlineUsernames?: string[];
+          latestVersion?: number;
+        };
+
+        if (msg.type === "presence" && msg.documentId === initialDocument.id && Array.isArray(msg.onlineUsernames)) {
+          setOnlineUsernames(msg.onlineUsernames);
+        }
+
+        if (msg.type === "document_operations_updated" && msg.documentId === initialDocument.id) {
+          void fetchOperations();
+        }
+      };
+
+      socket.onclose = () => {
+        if (closed) {
+          return;
+        }
+        setTimeout(connect, 2000);
+      };
+
+      socket.onerror = () => {
+        socket.close();
+      };
     };
 
-    void poll();
-
-    const intervalId = setInterval(() => {
-      void poll();
-    }, 2000);
+    connect();
 
     return () => {
-      cancelled = true;
-      clearInterval(intervalId);
+      closed = true;
+      const socket = wsRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+          type: "leave_document",
+          documentId: initialDocument.id,
+        }));
+        socket.close();
+      }
+      wsRef.current = null;
     };
-  }, [blocksData, blocksLoading, utils, initialDocument.id, clientId]);
+  }, [initialDocument.id, currentUser?.username, fetchOperations]);
 
   // 自动保存（简化版，后续会用操作日志替换）
   useEffect(() => {
@@ -479,13 +558,16 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
                 const roleLabel = roles.join(" / ") || "成员";
                 const initials = member.username ? member.username.charAt(0).toUpperCase() : "成员";
+                const isOnline = !hasPresence || onlineUsernames.includes(member.username);
 
                 return (
                   <Tooltip key={member.id}>
                     <TooltipTrigger asChild>
                       <button
                         type="button"
-                        className="relative inline-flex size-8 items-center justify-center rounded-full border-2 border-white bg-slate-200 text-xs font-medium text-slate-700 overflow-hidden shadow-sm dark:border-slate-900 dark:bg-slate-700 dark:text-slate-50"
+                        className={`relative inline-flex size-8 items-center justify-center rounded-full border-2 border-white bg-slate-200 text-xs font-medium text-slate-700 overflow-hidden shadow-sm dark:border-slate-900 dark:bg-slate-700 dark:text-slate-50 ${
+                          isOnline ? "" : "grayscale opacity-60"
+                        }`}
                         aria-label={`${member.username}（${roleLabel}）`}
                       >
                         {member.imageUrl ? (
