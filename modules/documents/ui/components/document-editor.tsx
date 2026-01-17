@@ -29,6 +29,9 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [isHeadingPopoverOpen, setIsHeadingPopoverOpen] = useState(false);
+  const [isParagraphPopoverOpen, setIsParagraphPopoverOpen] = useState(false);
+  const [isListPopoverOpen, setIsListPopoverOpen] = useState(false);
+  const [isCodePopoverOpen, setIsCodePopoverOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [confirmCopyOpen, setConfirmCopyOpen] = useState(false);
   const [inviteLink, setInviteLink] = useState("");
@@ -817,28 +820,48 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
               <div className="space-y-2">
                 <div className="text-xs text-slate-500">添加内容块</div>
                 <div className="flex gap-2 flex-wrap">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                    const maxPosition = blocks.length > 0 
-                      ? Math.max(...blocks.map(b => b.position)) 
-                      : -1;
-                    await handleBlockCreate({
-                      documentId: initialDocument.id,
-                      parentId: null,
-                      type: 'paragraph',
-                      content: { text: { content: '' } },
-                      properties: {},
-                      position: maxPosition + 1,
-                      version: 1,
-                      createdBy: '', // 这个字段会在服务器端设置
-                    });
-                  }}
-                  >
-                    <Plus className="size-4 mr-1" />
-                    段落
-                  </Button>
+                  <div className="relative inline-block">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      onClick={() => setIsParagraphPopoverOpen((open) => !open)}
+                    >
+                      <Plus className="size-4 mr-1" />
+                      段落
+                    </Button>
+                    {isParagraphPopoverOpen && (
+                      <div className="absolute z-20 mt-2 w-56 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-md py-1">
+                        <button
+                          type="button"
+                          className="w-full px-3 py-2 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          onClick={async () => {
+                            const maxPosition = blocks.length > 0
+                              ? Math.max(...blocks.map(b => b.position))
+                              : -1;
+                            await handleBlockCreate({
+                              documentId: initialDocument.id,
+                              parentId: null,
+                              type: 'paragraph',
+                              content: { text: { content: '' } },
+                              properties: {},
+                              position: maxPosition + 1,
+                              version: 1,
+                              createdBy: '',
+                            });
+                            setIsParagraphPopoverOpen(false);
+                          }}
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">段落</span>
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              基础文本内容块，用于普通说明和叙述
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <div className="relative inline-block">
                     <Button
                       variant="outline"
@@ -853,7 +876,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
                       <div className="absolute z-20 mt-2 w-40 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-md py-1">
                         <button
                           type="button"
-                          className="w-full px-3 py-1.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          className="w-full px-3 py-2 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
                           onClick={async () => {
                             const maxPosition = blocks.length > 0
                               ? Math.max(...blocks.map(b => b.position))
@@ -861,21 +884,26 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
                             await handleBlockCreate({
                               documentId: initialDocument.id,
                               parentId: null,
-                              type: 'heading_1',
-                              content: { text: { content: '' } },
+                              type: "heading_1",
+                              content: { text: { content: "" } },
                               properties: {},
                               position: maxPosition + 1,
                               version: 1,
-                              createdBy: '',
+                              createdBy: "",
                             });
                             setIsHeadingPopoverOpen(false);
                           }}
                         >
-                          H1 标题
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">标题</span>
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              H1 标题，用于页面主标题
+                            </span>
+                          </div>
                         </button>
                         <button
                           type="button"
-                          className="w-full px-3 py-1.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          className="w-full px-3 py-2 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
                           onClick={async () => {
                             const maxPosition = blocks.length > 0
                               ? Math.max(...blocks.map(b => b.position))
@@ -883,21 +911,26 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
                             await handleBlockCreate({
                               documentId: initialDocument.id,
                               parentId: null,
-                              type: 'heading_2',
-                              content: { text: { content: '' } },
+                              type: "heading_2",
+                              content: { text: { content: "" } },
                               properties: {},
                               position: maxPosition + 1,
                               version: 1,
-                              createdBy: '',
+                              createdBy: "",
                             });
                             setIsHeadingPopoverOpen(false);
                           }}
                         >
-                          H2 标题
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">小标题</span>
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              H2 标题，用于章节标题
+                            </span>
+                          </div>
                         </button>
                         <button
                           type="button"
-                          className="w-full px-3 py-1.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          className="w-full px-3 py-2 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
                           onClick={async () => {
                             const maxPosition = blocks.length > 0
                               ? Math.max(...blocks.map(b => b.position))
@@ -905,65 +938,110 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
                             await handleBlockCreate({
                               documentId: initialDocument.id,
                               parentId: null,
-                              type: 'heading_3',
-                              content: { text: { content: '' } },
+                              type: "heading_3",
+                              content: { text: { content: "" } },
                               properties: {},
                               position: maxPosition + 1,
                               version: 1,
-                              createdBy: '',
+                              createdBy: "",
                             });
                             setIsHeadingPopoverOpen(false);
                           }}
                         >
-                          H3 标题
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">次级标题</span>
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              H3 标题，用于小节标题
+                            </span>
+                          </div>
                         </button>
                       </div>
                     )}
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      const maxPosition = blocks.length > 0 
-                        ? Math.max(...blocks.map(b => b.position)) 
-                        : -1;
-                      await handleBlockCreate({
-                        documentId: initialDocument.id,
-                        parentId: null,
-                        type: 'list',
-                        content: { list: { items: [''] } },
-                        properties: {},
-                        position: maxPosition + 1,
-                        version: 1,
-                        createdBy: '',
-                      });
-                    }}
-                  >
-                    <List className="size-4 mr-1" />
-                    列表
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      const maxPosition = blocks.length > 0 
-                        ? Math.max(...blocks.map(b => b.position)) 
-                        : -1;
-                      await handleBlockCreate({
-                        documentId: initialDocument.id,
-                        parentId: null,
-                        type: 'code',
-                        content: { code: { content: '', language: 'javascript' } },
-                        properties: {},
-                        position: maxPosition + 1,
-                        version: 1,
-                        createdBy: '',
-                      });
-                    }}
-                  >
-                    <Code className="size-4 mr-1" />
-                    代码
-                  </Button>
+                  <div className="relative inline-block">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      onClick={() => setIsListPopoverOpen((open) => !open)}
+                    >
+                      <List className="size-4 mr-1" />
+                      列表
+                    </Button>
+                    {isListPopoverOpen && (
+                      <div className="absolute z-20 mt-2 w-56 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-md py-1">
+                        <button
+                          type="button"
+                          className="w-full px-3 py-2 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          onClick={async () => {
+                            const maxPosition = blocks.length > 0
+                              ? Math.max(...blocks.map(b => b.position))
+                              : -1;
+                            await handleBlockCreate({
+                              documentId: initialDocument.id,
+                              parentId: null,
+                              type: "list",
+                              content: { list: { items: [""] } },
+                              properties: {},
+                              position: maxPosition + 1,
+                              version: 1,
+                              createdBy: "",
+                            });
+                            setIsListPopoverOpen(false);
+                          }}
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">项目列表</span>
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              用于分条罗列要点或待办事项
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="relative inline-block">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      onClick={() => setIsCodePopoverOpen((open) => !open)}
+                    >
+                      <Code className="size-4 mr-1" />
+                      代码
+                    </Button>
+                    {isCodePopoverOpen && (
+                      <div className="absolute z-20 mt-2 w-64 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-md py-1">
+                        <button
+                          type="button"
+                          className="w-full px-3 py-2 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          onClick={async () => {
+                            const maxPosition = blocks.length > 0
+                              ? Math.max(...blocks.map(b => b.position))
+                              : -1;
+                            await handleBlockCreate({
+                              documentId: initialDocument.id,
+                              parentId: null,
+                              type: "code",
+                              content: { code: { content: "", language: "javascript" } },
+                              properties: {},
+                              position: maxPosition + 1,
+                              version: 1,
+                              createdBy: "",
+                            });
+                            setIsCodePopoverOpen(false);
+                          }}
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">代码块</span>
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              展示格式化代码，默认语言为 JavaScript
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
