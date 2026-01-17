@@ -115,6 +115,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
   const updateDocumentMutation = trpc.documents.updateDocument.useMutation();
   const saveYjsStateMutation = trpc.documents.saveYjsState.useMutation();
+  const saveYjsStateMutationRef = useRef(saveYjsStateMutation);
   const deleteDocumentMutation = trpc.documents.deleteDocument.useMutation({
     onSuccess: () => {
       router.push("/documents");
@@ -296,6 +297,10 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const currentVersionRef = useRef(0);
   const hasInitializedVersionRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    saveYjsStateMutationRef.current = saveYjsStateMutation;
+  }, [saveYjsStateMutation]);
 
   const selectedBlock = useMemo(
     () => (selectedBlockId ? blocks.find((block) => block.id === selectedBlockId) : undefined),
@@ -782,7 +787,8 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         const update = Y.encodeStateAsUpdate(ydocRef.current);
         const stateArray = Array.from(update);
 
-        void saveYjsStateMutation.mutateAsync({
+        const mutation = saveYjsStateMutationRef.current;
+        void mutation.mutateAsync({
           documentId: initialDocument.id,
           state: stateArray,
         });
@@ -831,7 +837,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       provider.destroy();
       ydoc.destroy();
     };
-  }, [initialDocument.id, canEditDocument, saveYjsStateMutation]);
+  }, [initialDocument.id, canEditDocument]);
 
   useEffect(() => {
     if (typeof window === "undefined") {

@@ -48,6 +48,10 @@ async function syncBlocksFromYjsState() {
   try {
     await client.query("BEGIN");
 
+    await client.query(
+      `ALTER TABLE documents ADD COLUMN IF NOT EXISTS yjs_state text`
+    );
+
     const docsWithState = await client.query<{
       id: string;
       yjs_state: string | null;
