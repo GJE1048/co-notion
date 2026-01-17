@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { protectedProcedure, createTRPCRouter } from "@/trpc/init";
 import { db } from "@/db";
-import { workspaces, documents, tags, documentTags } from "@/db/schema";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { workspaces, documents, tags, documentTags, users, workspaceMembers } from "@/db/schema";
+import { eq, and, desc, sql, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
 const createWorkspaceSchema = z.object({
@@ -26,7 +26,7 @@ export const workspacesRouter = createTRPCRouter({
   // 获取用户的所有工作区（通过 clerkId 关联）
   getUserWorkspaces: protectedProcedure
     .query(async ({ ctx }) => {
-      const userWorkspaces = await db
+      const result = await db
         .select({
           id: workspaces.id,
           name: workspaces.name,
@@ -36,10 +36,18 @@ export const workspacesRouter = createTRPCRouter({
           updatedAt: workspaces.updatedAt,
         })
         .from(workspaces)
-        .where(eq(workspaces.ownerId, ctx.user.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(or(eq(workspaces.ownerId, ctx.user.id), eq(workspaceMembers.userId, ctx.user.id)))
         .orderBy(desc(workspaces.createdAt));
 
-      return userWorkspaces;
+      return result.map(r => ({
+        id: r.id,
+        name: r.name,
+        isPersonal: r.isPersonal,
+        permissions: r.permissions,
+        createdAt: r.createdAt,
+        updatedAt: r.updatedAt,
+      }));
     }),
 
   // 获取单个工作区详情（通过 clerkId 关联）
@@ -56,9 +64,10 @@ export const workspacesRouter = createTRPCRouter({
           updatedAt: workspaces.updatedAt,
         })
         .from(workspaces)
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(workspaces.id, input.id),
-          eq(workspaces.ownerId, ctx.user.id)
+          or(eq(workspaces.ownerId, ctx.user.id), eq(workspaceMembers.userId, ctx.user.id))
         ));
 
       if (!workspace) {
@@ -178,9 +187,10 @@ export const workspacesRouter = createTRPCRouter({
           workspace: workspaces,
         })
         .from(workspaces)
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(workspaces.id, input.workspaceId),
-          eq(workspaces.ownerId, ctx.user.id)
+          or(eq(workspaces.ownerId, ctx.user.id), eq(workspaceMembers.userId, ctx.user.id))
         ));
 
       if (!workspaceResult) {
@@ -375,6 +385,55 @@ export const workspacesRouter = createTRPCRouter({
         .update(tags)
         .set({ usage: tag.usage + 1 })
         .where(eq(tags.id, input.tagId));
+
+      return { success: true };
+    }),
+
+  inviteUserToWorkspace: protectedProcedure
+    .input(z.object({
+      workspaceId: z.string(),
+      targetUsername: z.string(),
+      role: z.enum(['admin', 'editor', 'viewer']).default('admin'),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const [ws] = await db
+        .select()
+        .from(workspaces)
+        .where(and(eq(workspaces.id, input.workspaceId), eq(workspaces.ownerId, ctx.user.id)));
+
+      if (!ws) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "工作区不存在或无权限" });
+      }
+
+      const [target] = await db
+        .select()
+        .from(users)
+        .where(eq(users.username, input.targetUsername));
+
+      if (!target) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "目标用户不存在" });
+      }
+
+      const [existing] = await db
+        .select()
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, input.workspaceId), eq(workspaceMembers.userId, target.id)));
+
+      if (existing) {
+        await db
+          .update(workspaceMembers)
+          .set({ role: input.role })
+          .where(eq(workspaceMembers.id, existing.id));
+        return { success: true };
+      }
+
+      await db
+        .insert(workspaceMembers)
+        .values({
+          workspaceId: input.workspaceId,
+          userId: target.id,
+          role: input.role,
+        });
 
       return { success: true };
     }),

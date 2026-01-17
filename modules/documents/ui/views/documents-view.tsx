@@ -12,6 +12,10 @@ import { Loader2, FileText, Plus, FolderPlus } from "lucide-react";
 export const DocumentsView = () => {
   const [isCreateWorkspaceDialogOpen, setIsCreateWorkspaceDialogOpen] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
+  const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [inviteUsername, setInviteUsername] = useState("");
+  const [inviteWorkspaceId, setInviteWorkspaceId] = useState<string>("");
+  const [inviteRole, setInviteRole] = useState<"admin" | "editor" | "viewer">("admin");
 
   const {
     data: documents,
@@ -34,6 +38,13 @@ export const DocumentsView = () => {
       setWorkspaceName("");
       // 重新获取文档列表以显示新工作区
       window.location.reload();
+    },
+  });
+  const inviteWorkspaceMutation = trpc.workspaces.inviteUserToWorkspace.useMutation({
+    onSuccess: () => {
+      setIsInviteOpen(false);
+      setInviteUsername("");
+      setInviteWorkspaceId("");
     },
   });
 
@@ -186,6 +197,89 @@ export const DocumentsView = () => {
             )}
             新建文档
           </Button>
+          <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline">邀请成员</Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>邀请用户到工作区</DialogTitle>
+              </DialogHeader>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!inviteUsername.trim() || !inviteWorkspaceId) return;
+                  inviteWorkspaceMutation.mutate({
+                    workspaceId: inviteWorkspaceId,
+                    targetUsername: inviteUsername.trim(),
+                    role: inviteRole,
+                  });
+                }}
+                className="space-y-4"
+              >
+                <div>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">选择工作区</label>
+                  <select
+                    className="mt-1 w-full border rounded-md p-2 bg-white dark:bg-slate-900"
+                    value={inviteWorkspaceId}
+                    onChange={(e) => setInviteWorkspaceId(e.target.value)}
+                    disabled={inviteWorkspaceMutation.isPending}
+                  >
+                    <option value="">请选择</option>
+                    {(workspaces || []).map((ws) => (
+                      <option key={ws.id} value={ws.id as string}>
+                        {ws.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">用户名</label>
+                  <Input
+                    type="text"
+                    placeholder="输入用户名"
+                    value={inviteUsername}
+                    onChange={(e) => setInviteUsername(e.target.value)}
+                    disabled={inviteWorkspaceMutation.isPending}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">权限</label>
+                  <select
+                    className="mt-1 w-full border rounded-md p-2 bg-white dark:bg-slate-900"
+                    value={inviteRole}
+                    onChange={(e) => setInviteRole(e.target.value as "admin" | "editor" | "viewer")}
+                    disabled={inviteWorkspaceMutation.isPending}
+                  >
+                    <option value="admin">管理员</option>
+                    <option value="editor">编辑者</option>
+                    <option value="viewer">查看者</option>
+                  </select>
+                </div>
+                <div className="flex items-center justify-end gap-3 pt-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setIsInviteOpen(false)}
+                    disabled={inviteWorkspaceMutation.isPending}
+                  >
+                    取消
+                  </Button>
+                  <Button type="submit" disabled={inviteWorkspaceMutation.isPending || !inviteWorkspaceId || !inviteUsername.trim()}>
+                    {inviteWorkspaceMutation.isPending ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin mr-2" />
+                        发送中...
+                      </>
+                    ) : (
+                      "发送邀请"
+                    )}
+                  </Button>
+                </div>
+              </form>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
 

@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { protectedProcedure, createTRPCRouter } from "@/trpc/init";
 import { db } from "@/db";
-import { blocks, documents, operations } from "@/db/schema";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { blocks, documents, operations, documentCollaborators } from "@/db/schema";
+import { eq, and, desc, sql, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
 export const blocksRouter = createTRPCRouter({
@@ -26,9 +26,10 @@ export const blocksRouter = createTRPCRouter({
         })
         .from(blocks)
         .innerJoin(documents, eq(blocks.documentId, documents.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
         .where(and(
           eq(blocks.id, input.id),
-          eq(documents.ownerId, ctx.user.id)
+          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
         ));
 
       if (!block) {
@@ -64,12 +65,14 @@ export const blocksRouter = createTRPCRouter({
         .select({
           block: blocks,
           document: documents,
+          collaboratorUserId: documentCollaborators.userId,
         })
         .from(blocks)
         .innerJoin(documents, eq(blocks.documentId, documents.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
         .where(eq(blocks.id, input.id));
 
-      if (!block || block.document.ownerId !== ctx.user.id) {
+      if (!block || (block.document.ownerId !== ctx.user.id && block.collaboratorUserId !== ctx.user.id)) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Block 不存在或无权限访问",
@@ -120,12 +123,14 @@ export const blocksRouter = createTRPCRouter({
         .select({
           block: blocks,
           document: documents,
+          collaboratorUserId: documentCollaborators.userId,
         })
         .from(blocks)
         .innerJoin(documents, eq(blocks.documentId, documents.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
         .where(eq(blocks.id, input.id));
 
-      if (!block || block.document.ownerId !== ctx.user.id) {
+      if (!block || (block.document.ownerId !== ctx.user.id && block.collaboratorUserId !== ctx.user.id)) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Block 不存在或无权限访问",
@@ -169,9 +174,10 @@ export const blocksRouter = createTRPCRouter({
       const [document] = await db
         .select()
         .from(documents)
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
         .where(and(
           eq(documents.id, input.documentId),
-          eq(documents.ownerId, ctx.user.id)
+          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
         ));
 
       if (!document) {
@@ -211,9 +217,10 @@ export const blocksRouter = createTRPCRouter({
       const [document] = await db
         .select()
         .from(documents)
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
         .where(and(
           eq(documents.id, input.documentId),
-          eq(documents.ownerId, ctx.user.id)
+          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
         ));
 
       if (!document) {
@@ -354,9 +361,10 @@ export const blocksRouter = createTRPCRouter({
       const [document] = await db
         .select()
         .from(documents)
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
         .where(and(
           eq(documents.id, input.documentId),
-          eq(documents.ownerId, ctx.user.id)
+          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
         ));
 
       if (!document) {
@@ -420,12 +428,14 @@ export const blocksRouter = createTRPCRouter({
         .select({
           block: blocks,
           document: documents,
+          collaboratorUserId: documentCollaborators.userId,
         })
         .from(blocks)
         .innerJoin(documents, eq(blocks.documentId, documents.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
         .where(and(
           eq(blocks.id, input.blockId),
-          eq(documents.ownerId, ctx.user.id)
+          or(eq(documents.ownerId, ctx.user.id), eq(documentCollaborators.userId, ctx.user.id))
         ));
 
       if (!block) {

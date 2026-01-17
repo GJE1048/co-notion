@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { Loader2, Save, ArrowLeft, Plus, Heading1, List, Code } from "lucide-react";
+import { Loader2, Save, ArrowLeft, Plus, Heading1, List, Code, Share } from "lucide-react";
 import { trpc } from "@/trpc/client";
 import { BlockEditor } from "./block-editor";
 import type { documents, blocks, operations as operationsTable } from "@/db/schema";
@@ -38,6 +38,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const updateBlockMutation = trpc.blocks.updateBlock.useMutation();
   const deleteBlockMutation = trpc.blocks.deleteBlock.useMutation();
   const updateDocumentMutation = trpc.documents.updateDocument.useMutation();
+  const shareDocumentMutation = trpc.documents.shareDocumentToUser.useMutation();
 
   const blocks = blocksData?.blocks || [];
   const isLoading = blocksLoading;
@@ -88,6 +89,10 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   }, [updateDocumentMutation, initialDocument.id, title]);
 
   const isSaving = updateDocumentMutation.isPending;
+  const [isShareOpen, setIsShareOpen] = useState(false);
+  const [targetUsername, setTargetUsername] = useState("");
+  const [copyToPersonal, setCopyToPersonal] = useState(true);
+  const isSharing = shareDocumentMutation.isPending;
 
   // Block 操作处理函数
   const handleBlockCreate = useCallback(async (blockData: Omit<Block, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -366,6 +371,16 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
             </span>
           )}
           <Button
+            onClick={() => setIsShareOpen(true)}
+            disabled={isLoading}
+            size="sm"
+            variant="outline"
+            className="flex items-center gap-2"
+          >
+            <Share className="size-4" />
+            分享
+          </Button>
+          <Button
             onClick={() => handleSave()}
             disabled={isSaving || isLoading}
             size="sm"
@@ -523,6 +538,75 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
           </div>
         </CardContent>
       </Card>
+
+      {isShareOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg w-full max-w-md p-6">
+            <div className="text-lg font-semibold mb-4">分享文档</div>
+            {error && (
+              <div className="mb-3 text-sm text-red-600 dark:text-red-400">{error}</div>
+            )}
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-slate-600 dark:text-slate-300">目标用户名</label>
+                <Input
+                  value={targetUsername}
+                  onChange={(e) => setTargetUsername(e.target.value)}
+                  placeholder="输入对方的用户名"
+                  className="mt-1"
+                  disabled={isSharing}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  id="copy-to-personal"
+                  type="checkbox"
+                  checked={copyToPersonal}
+                  onChange={(e) => setCopyToPersonal(e.target.checked)}
+                  disabled={isSharing}
+                />
+                <label htmlFor="copy-to-personal" className="text-sm text-slate-700 dark:text-slate-300">
+                  复制到对方“我的文档”并成为所有者
+                </label>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => setIsShareOpen(false)} disabled={isSharing}>
+                  取消
+                </Button>
+                <Button
+                  onClick={async () => {
+                    try {
+                      setError(null);
+                      const res = await shareDocumentMutation.mutateAsync({
+                        documentId: initialDocument.id,
+                        targetUsername: targetUsername.trim(),
+                        copyToPersonal,
+                      });
+                      setIsShareOpen(false);
+                      setTargetUsername("");
+                      if (res?.newDocumentId || res?.sharedAsCollaborator) {
+                        setLastSaved(new Date());
+                      }
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "分享失败");
+                    }
+                  }}
+                  disabled={isSharing || !targetUsername.trim()}
+                >
+                  {isSharing ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin mr-2" />
+                      发送中...
+                    </>
+                  ) : (
+                    "发送邀请"
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

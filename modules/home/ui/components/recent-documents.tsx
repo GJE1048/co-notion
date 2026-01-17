@@ -6,6 +6,7 @@ import { useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   FileText,
   MoreHorizontal,
@@ -120,10 +121,44 @@ export const RecentDocuments = ({ documents: initialDocuments }: RecentDocuments
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {isLoading && recentDocuments.length === 0 ? (
-          <div className="text-center py-8 text-slate-500 dark:text-slate-400">
-            <RefreshCw className="size-6 animate-spin mx-auto mb-2" />
-            <p>加载文档中...</p>
+        {!isSignedIn ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between p-4 rounded-lg border border-slate-200 dark:border-slate-700"
+              >
+                <div className="flex items-center gap-4 flex-1">
+                  <Skeleton className="h-8 w-8 rounded-lg" />
+                  <div className="flex-1">
+                    <Skeleton className="h-4 w-56 mb-2" />
+                    <Skeleton className="h-3 w-36" />
+                  </div>
+                </div>
+                <Skeleton className="h-6 w-16" />
+              </div>
+            ))}
+            <div className="text-center py-2 text-slate-500 dark:text-slate-400 text-sm">
+              当前未登录，无文档
+            </div>
+          </div>
+        ) : isLoading && recentDocuments.length === 0 ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between p-4 rounded-lg border border-slate-200 dark:border-slate-700"
+              >
+                <div className="flex items-center gap-4 flex-1">
+                  <Skeleton className="h-8 w-8 rounded-lg" />
+                  <div className="flex-1">
+                    <Skeleton className="h-4 w-56 mb-2" />
+                    <Skeleton className="h-3 w-36" />
+                  </div>
+                </div>
+                <Skeleton className="h-6 w-16" />
+              </div>
+            ))}
           </div>
         ) : error ? (
           <div className="text-center py-8 text-red-500 dark:text-red-400">

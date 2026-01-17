@@ -165,12 +165,32 @@ WHERE NOT EXISTS (
     SELECT 1 FROM blocks b WHERE b.document_id = d.id
 );
 
+-- 添加工作区成员表
+CREATE TABLE IF NOT EXISTS workspace_members (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'admin',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT idx_workspace_member_unique UNIQUE (workspace_id, user_id)
+);
+
+-- 添加文档协作者表
+CREATE TABLE IF NOT EXISTS document_collaborators (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'owner',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT idx_document_collaborator_unique UNIQUE (document_id, user_id)
+);
+
 -- 输出执行结果
 DO $$
 BEGIN
     RAISE NOTICE 'Blocks system migration completed successfully';
-    RAISE NOTICE 'Created tables: workspaces, blocks, operations, document_snapshots, tags, document_tags';
-    RAISE NOTICE 'Updated table: documents (added workspace_id, is_template, is_archived, permissions, metadata)';
+    RAISE NOTICE 'Created tables: workspaces, blocks, operations, document_snapshots, tags, document_tags, workspace_members, document_collaborators';
+    RAISE NOTICE 'Updated table: documents (added workspace_id, is_template, is_archived, permissions, metadata, collaborators)';
     RAISE NOTICE 'Created indexes for performance optimization';
     RAISE NOTICE 'Created default personal workspaces for existing users';
     RAISE NOTICE 'Created initial title blocks for existing documents';
