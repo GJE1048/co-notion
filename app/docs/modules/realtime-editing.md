@@ -259,6 +259,141 @@ POST /api/documents/:id/restore
 - 防止 DoS 攻击
 - 智能降级处理
 
+## 写入与持久化优化方案
+
+### 1. 架构：编辑与持久化解耦
+
+在协同编辑场景中, 大部分性能问题来自「每次编辑都写数据库」。正确的架构是将「实时编辑」和「持久化存储」解耦:
+
+- 用户编辑 → WebSocket → Yjs 同步 (内存)
+- 其他用户即时看到变更
+- 后端异步、批量地将 Y.Doc 状态持久化到数据库
+
+Yjs 负责**最终一致性和协同逻辑**, 数据库只作为**快照与备份**, 不需要在每次按键时都写入。
+
+### 2. 服务端 Y.Doc 驻留与防抖持久化
+
+#### 2.1 内存中的 Y.Doc 管理
+
+在服务端维护一个简单的 Y.Doc 存储, 每个文档一个 Y.Doc, 只在收到 WebSocket 更新时操作内存:
+
+```ts
+import * as Y from "yjs";
+import { debounce } from "lodash";
+
+const docs = new Map<string, Y.Doc>();
+
+async function persistYDoc(docId: string, ydoc: Y.Doc) {
+  const update = Y.encodeStateAsUpdate(ydoc);
+  const buffer = Buffer.from(update);
+  await db
+    .update(documents)
+    .set({ yjsState: buffer, updatedAt: new Date() })
+    .where(eq(documents.id, docId));
+}
+
+export function getYDoc(docId: string) {
+  if (!docs.has(docId)) {
+    const ydoc = new Y.Doc();
+
+    const saveDebounced = debounce(() => {
+      void persistYDoc(docId, ydoc);
+    }, 5000);
+
+    ydoc.on("update", saveDebounced);
+
+    docs.set(docId, ydoc);
+  }
+
+  return docs.get(docId)!;
+}
+```
+
+要点:
+- 所有协同编辑只修改内存中的 Y.Doc, 响应快。
+- 使用防抖 (例如 5 秒) 将频繁更新压缩为少量持久化写。
+- 即使服务进程重启, 仍可从数据库中的 Yjs 状态重建 Y.Doc。
+
+#### 2.2 WebSocket 与 Y.Doc 的结合
+
+WebSocket 层只负责接收前端 Yjs update, 应用到对应的 Y.Doc:
+
+```ts
+ws.on("message", (raw) => {
+  const { documentId, update } = JSON.parse(raw.toString());
+  const ydoc = getYDoc(documentId);
+  const binary = Buffer.from(update, "base64");
+  Y.applyUpdate(ydoc, binary);
+});
+```
+
+所有协作者共享同一个 Y.Doc, Yjs 负责增量同步和冲突解决, 不需要在这里调用任何 REST 更新接口。
+
+### 3. Redis 缓存与版本号策略
+
+在加载文档时, 可以将「Yjs 快照」或「转换后的 Block 列表」缓存到 Redis, 避免每次都从数据库重建。
+
+推荐的缓存策略:
+
+- Key 示例: `doc:${documentId}`
+- Value 结构:
+  - `version`: 版本号 (时间戳或 monotonically increasing)
+  - `data`: 已转换的文档视图 (例如 Block 列表)
+
+读取时:
+
+```ts
+const cacheKey = `doc:${documentId}`;
+const cached = await redis.get<{
+  version: number;
+  data: unknown;
+}>(cacheKey);
+
+if (cached && cached.version === currentVersion) {
+  return cached.data;
+}
+```
+
+更新后:
+
+```ts
+const nextVersion = Date.now();
+const data = convertYDocToBlocks(ydoc);
+
+await redis.set(cacheKey, { version: nextVersion, data }, { ex: 60 });
+```
+
+通过版本字段, 可以避免频繁删除缓存, 降低缓存击穿的风险, 同时仍然保证数据新鲜度。
+
+### 4. 前端更新策略: WebSocket 优先, REST 降级
+
+前端在协同场景下的推荐路径:
+
+- Block 内容编辑:
+  - 直接操作本地 Y.Doc/Y.Map/Y.Text。
+  - 由 y-websocket 自动将 update 推送到服务端和其他客户端。
+  - 不再为每次按键发送 REST PATCH 请求。
+- 非协同操作:
+  - 修改文档标题、归档状态、权限等, 仍然使用 TRPC/REST 调用。
+
+这样可以显著减少无意义的更新请求, 把网络带宽和后端资源集中在真正需要的操作上。
+
+### 5. 数据库写入优化建议
+
+即使降低了写入频率, 某些场景仍然需要持久化大量数据或日志, 可以考虑:
+
+- 批量写入:
+  - 将同一时间窗口内的多条记录打包到一次事务中。
+- 只存增量:
+  - 对于操作日志或历史回溯, 使用 Yjs update 增量而非完整快照。
+- 存储类型:
+  - 使用 BYTEA 或类似二进制字段存储 Yjs 状态, 读写性能通常优于 JSONB。
+
+结合前面的架构, 可以做到:
+- 打开文档: 首选 Redis 快照, 回退到数据库中的 Yjs 状态。
+- 编辑文档: 全程在内存 Y.Doc 中操作, 由 WebSocket+Yjs 协同, 用户无感。
+- 持久化: 防抖异步写入数据库, 对前端完全透明。
+
 ### 数据加密
 - WebSocket 连接使用 WSS
 - 操作数据加密传输
