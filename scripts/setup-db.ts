@@ -1,9 +1,8 @@
-import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as dotenv from "dotenv";
 import * as fs from "fs";
 import * as path from "path";
-import { users, documents } from "../db/schema";
+import * as Y from "yjs";
 
 // 加载 .env.local 文件
 const envPath = path.join(process.cwd(), ".env.local");
@@ -41,7 +40,146 @@ const pool = new Pool({
   ssl: cleanDbUrl.includes("neon.tech") ? { rejectUnauthorized: false } : undefined,
 });
 
-const db = drizzle(pool);
+async function syncBlocksFromYjsState() {
+  console.log("\n🔄 开始根据 Yjs 状态重建 blocks 表...");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const docsWithState = await client.query<{
+      id: string;
+      yjs_state: string | null;
+    }>(
+      `SELECT id, yjs_state FROM documents WHERE yjs_state IS NOT NULL`
+    );
+
+    console.log(`发现 ${docsWithState.rows.length} 个包含 yjs_state 的文档`);
+
+    for (const row of docsWithState.rows) {
+      const documentId = row.id;
+      const state = row.yjs_state;
+      if (!state) {
+        continue;
+      }
+
+      console.log(`\n处理文档 ${documentId} ...`);
+
+      const doc = new Y.Doc();
+      try {
+        const buffer = Buffer.from(state, "base64");
+        const update = new Uint8Array(buffer);
+        Y.applyUpdate(doc, update);
+      } catch (error) {
+        console.error(
+          `无法解析文档 ${documentId} 的 yjs_state，已跳过:`,
+          error
+        );
+        continue;
+      }
+
+      const yBlocks = doc.getArray<Y.Map<unknown>>("blocks");
+      const items = yBlocks.toArray();
+
+      console.log(`Y.Doc 中包含 ${items.length} 个 Block`);
+
+      const existingBlocks = await client.query<{
+        id: string;
+      }>(
+        `SELECT id FROM blocks WHERE document_id = $1`,
+        [documentId]
+      );
+
+      const existingIds = new Set(existingBlocks.rows.map((b) => b.id));
+      const yIds = new Set<string>();
+
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        const id = item.get("id") as string | undefined;
+        if (!id) {
+          continue;
+        }
+
+        yIds.add(id);
+        const type = (item.get("type") as string) || "paragraph";
+        const position =
+          (item.get("position") as number | undefined) ?? index;
+        const content = item.get("content");
+
+        let text = "";
+        if (content instanceof Y.Text) {
+          text = content.toString();
+        } else if (typeof content === "string") {
+          text = content;
+        }
+
+        let blockContent: unknown;
+        if (type === "code") {
+          blockContent = {
+            code: {
+              content: text,
+              language: "javascript",
+            },
+          };
+        } else {
+          blockContent = {
+            text: {
+              content: text,
+            },
+          };
+        }
+
+        if (existingIds.has(id)) {
+          await client.query(
+            `
+            UPDATE blocks
+            SET type = $1,
+                content = $2::jsonb,
+                position = $3,
+                updated_at = NOW()
+            WHERE id = $4
+          `,
+            [type, JSON.stringify(blockContent), position, id]
+          );
+        } else {
+          await client.query(
+            `
+            INSERT INTO blocks (id, document_id, parent_id, type, content, properties, position, version, created_by)
+            VALUES ($1, $2, NULL, $3, $4::jsonb, '{}'::jsonb, $5, 1, NULL)
+          `,
+            [id, documentId, type, JSON.stringify(blockContent), position]
+          );
+        }
+      }
+
+      const idsToDelete = Array.from(existingIds).filter(
+        (id) => !yIds.has(id)
+      );
+
+      if (idsToDelete.length > 0) {
+        await client.query(
+          `DELETE FROM blocks WHERE document_id = $1 AND id = ANY($2::uuid[])`,
+          [documentId, idsToDelete]
+        );
+        console.log(
+          `已删除在 Y.Doc 中不存在的 ${idsToDelete.length} 个 Block`
+        );
+      }
+
+      console.log(`文档 ${documentId} 同步完成`);
+    }
+
+    await client.query("COMMIT");
+    console.log("\n✅ blocks 表已根据 Yjs 状态完成重建");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("\n❌ 重建 blocks 表时出错:", error);
+    process.exitCode = 1;
+  } finally {
+    client.release();
+  }
+}
 
 async function setupDatabase() {
   try {
@@ -52,17 +190,19 @@ async function setupDatabase() {
     console.log("✅ 数据库连接成功\n");
 
     // 检查命令行参数
-    const sqlFile = process.argv[2];
+    const arg = process.argv[2];
 
-    if (sqlFile) {
+    if (arg === "sync-yjs-blocks") {
+      await syncBlocksFromYjsState();
+    } else if (arg) {
       // 运行指定的 SQL 文件
-      const sqlPath = path.join(process.cwd(), "scripts", sqlFile);
+      const sqlPath = path.join(process.cwd(), "scripts", arg);
       if (!fs.existsSync(sqlPath)) {
         console.error(`❌ SQL 文件不存在: ${sqlPath}`);
         process.exit(1);
       }
 
-      console.log(`📄 运行 SQL 文件: ${sqlFile}`);
+      console.log(`📄 运行 SQL 文件: ${arg}`);
       const sqlContent = fs.readFileSync(sqlPath, 'utf-8');
 
       // 分割 SQL 语句并执行
@@ -97,7 +237,7 @@ async function setupDatabase() {
       if (tables.rows.length === 0) {
         console.log("  (无表)");
       } else {
-        tables.rows.forEach((row: any) => {
+        tables.rows.forEach((row: { table_name: string }) => {
           console.log(`  - ${row.table_name}`);
         });
       }
@@ -168,7 +308,7 @@ async function setupDatabase() {
 
     console.log(`\n✅ 数据库设置完成！`);
     console.log(`\n当前数据库中的表 (${finalTables.rows.length} 个):`);
-    finalTables.rows.forEach((row: any) => {
+    finalTables.rows.forEach((row: { table_name: string }) => {
       console.log(`  - ${row.table_name}`);
     });
 
@@ -179,7 +319,7 @@ async function setupDatabase() {
       console.log(`\n数据统计:`);
       console.log(`  - 用户数: ${userCount.rows[0].count}`);
       console.log(`  - 文档数: ${docCount.rows[0].count}`);
-    } catch (error) {
+    } catch {
       console.log(`\n数据统计: 部分表可能不存在`);
     }
 
@@ -195,4 +335,3 @@ async function setupDatabase() {
 }
 
 setupDatabase();
-

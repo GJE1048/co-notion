@@ -113,9 +113,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     error: blocksError
   } = trpc.documents.getDocumentBlocksPage.useQuery(blocksQueryInput);
 
-  const createBlockMutation = trpc.documents.createBlock.useMutation();
-  const updateBlockMutation = trpc.blocks.updateBlock.useMutation();
-  const deleteBlockMutation = trpc.blocks.deleteBlock.useMutation();
   const updateDocumentMutation = trpc.documents.updateDocument.useMutation();
   const saveYjsStateMutation = trpc.documents.saveYjsState.useMutation();
   const deleteDocumentMutation = trpc.documents.deleteDocument.useMutation({
@@ -171,73 +168,110 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const ydocRef = useRef<Y.Doc | null>(null);
   const blocks = useMemo(
     () => {
-      if (!blocksData?.blocks) {
-        return [];
-      }
+      const dbBlocks = blocksData?.blocks ?? [];
 
       if (yjsBlocksSnapshot.length === 0) {
-        return blocksData.blocks;
+        return dbBlocks;
       }
 
-      const textById = new Map<string, string>();
-      const orderIndex = new Map<string, number>();
-      yjsBlocksSnapshot.forEach((b, index) => {
-        textById.set(b.id, b.text);
-        orderIndex.set(b.id, index);
-      });
+      type BlockType = Block["type"];
 
-      const withContent = blocksData.blocks.map((block) => {
-        const text = textById.get(block.id);
-        if (text === undefined) {
-          return block;
+      const dbById = new Map<string, Block>();
+      for (const block of dbBlocks) {
+        dbById.set(block.id, block);
+      }
+
+      const result: Block[] = [];
+
+      yjsBlocksSnapshot.forEach((item, index) => {
+        const id = item.id;
+        if (!id) {
+          return;
         }
 
-        if (block.type === "code") {
-          type CodeContent = {
-            code?: {
-              content?: string;
-              language?: string;
+        const dbBlock = dbById.get(id);
+        const type = (item.type as BlockType) || dbBlock?.type || "paragraph";
+        const text = item.text;
+
+        let base: Block;
+        if (dbBlock) {
+          base = dbBlock;
+        } else {
+          const content =
+            type === "code"
+              ? {
+                  code: {
+                    content: text,
+                    language: "javascript",
+                  },
+                }
+              : {
+                  text: {
+                    content: text,
+                  },
+                };
+
+          base = {
+            id,
+            documentId: initialDocument.id,
+            parentId: null,
+            type,
+            content,
+            properties: {},
+            position: index,
+            version: 1,
+            createdBy: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          } as Block;
+        }
+
+        const nextContent = (() => {
+          if (text === undefined || text === null) {
+            return base.content;
+          }
+
+          if (type === "code") {
+            type CodeContent = {
+              code?: {
+                content?: string;
+                language?: string;
+              };
             };
-          };
-          const value = block.content as unknown as CodeContent;
-          const language = value.code?.language ?? "javascript";
-          return {
-            ...block,
-            content: {
+            const value = base.content as unknown as CodeContent;
+            const language = value.code?.language ?? "javascript";
+            return {
               code: {
                 content: text,
                 language,
               },
-            } as unknown,
-          };
-        }
+            } as unknown;
+          }
 
-        return {
-          ...block,
-          content: {
+          return {
             text: {
               content: text,
             },
-          } as unknown,
-        };
+          } as unknown;
+        })();
+
+        result.push({
+          ...base,
+          type,
+          content: nextContent,
+          position: index,
+        });
+
+        dbById.delete(id);
       });
 
-      return withContent.slice().sort((a, b) => {
-        const ia = orderIndex.get(a.id);
-        const ib = orderIndex.get(b.id);
-        if (ia === undefined && ib === undefined) {
-          return a.position - b.position;
-        }
-        if (ia === undefined) {
-          return 1;
-        }
-        if (ib === undefined) {
-          return -1;
-        }
-        return ia - ib;
-      });
+      const remaining = Array.from(dbById.values()).sort(
+        (a, b) => a.position - b.position
+      );
+
+      return result.concat(remaining);
     },
-    [blocksData, yjsBlocksSnapshot]
+    [blocksData, yjsBlocksSnapshot, initialDocument.id]
   );
   const isLoading = blocksLoading;
 
@@ -372,59 +406,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     }
   }, [blocksData, blocksLoading, utils, initialDocument.id, clientId]);
 
-  const syncBlockToYjs = useCallback((block: Block) => {
-    const yBlocks = yBlocksRef.current;
-    if (!yBlocks) {
-      return;
-    }
-
-    const array = yBlocks.toArray() as Y.Map<unknown>[];
-    const existingIndex = array.findIndex((item) => item.get("id") === block.id);
-    let textContent = "";
-
-    if (block.type === "code") {
-      type CodeContent = {
-        code?: {
-          content?: string;
-        };
-      };
-      const value = block.content as unknown as CodeContent;
-      textContent = value.code?.content ?? "";
-    } else {
-      type TextContent = {
-        text?: {
-          content?: string;
-        };
-      };
-      const value = block.content as unknown as TextContent;
-      textContent = value.text?.content ?? "";
-    }
-
-    if (existingIndex >= 0) {
-      const yBlock = array[existingIndex];
-      yBlock.set("type", block.type);
-      yBlock.set("position", block.position);
-      const content = yBlock.get("content");
-      if (content instanceof Y.Text) {
-        content.delete(0, content.length);
-        content.insert(0, textContent);
-      } else {
-        const yText = new Y.Text(textContent);
-        yBlock.set("content", yText);
-      }
-      return;
-    }
-
-    const yBlock = new Y.Map<unknown>();
-    yBlock.set("id", block.id);
-    yBlock.set("type", block.type);
-    yBlock.set("position", block.position);
-    const yText = new Y.Text(textContent);
-    yBlock.set("content", yText);
-
-    yBlocks.push([yBlock]);
-  }, []);
-
   const deleteBlockFromYjs = useCallback((blockId: string) => {
     const yBlocks = yBlocksRef.current;
     if (!yBlocks) {
@@ -469,76 +450,219 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const isDeletingDocument = deleteDocumentMutation.isPending;
   const isDuplicatingDocument = duplicateDocumentMutation.isPending;
 
-  // Block 操作处理函数
-  const handleBlockCreate = useCallback(async (blockData: Omit<Block, "id" | "createdAt" | "updatedAt">) => {
-    try {
-      setError(null);
-      const newBlock = await createBlockMutation.mutateAsync({
-        ...blockData,
-        clientId,
-      });
-      syncBlockToYjs(newBlock as Block);
-      await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
-    } catch (err) {
-      console.error('Failed to create block:', err);
-      setError(err instanceof Error ? err.message : '创建 Block 失败');
-    }
-  }, [createBlockMutation, utils, initialDocument.id, clientId, syncBlockToYjs]);
-
-  // 在指定块之后创建新块
-  const handleBlockCreateAfter = useCallback(async (afterBlockId: string, blockData: Omit<Block, "id" | "createdAt" | "updatedAt">) => {
-    try {
-      setError(null);
-      // 获取当前块的位置，新块位置 = 当前块位置 + 1
-      const afterBlock = blocks.find(b => b.id === afterBlockId);
-      if (afterBlock) {
-        blockData.position = afterBlock.position + 1;
-      } else {
-        // 如果没有找到，使用最大位置 + 1
-        const maxPosition = blocks.length > 0 
-          ? Math.max(...blocks.map(b => b.position)) 
-          : -1;
-        blockData.position = maxPosition + 1;
-      }
-      
-      const newBlock = await createBlockMutation.mutateAsync({
-        ...blockData,
-        clientId,
-      });
-      syncBlockToYjs(newBlock as Block);
-      await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
-    } catch (err) {
-      console.error('Failed to create block after:', err);
-      setError(err instanceof Error ? err.message : '创建 Block 失败');
-    }
-  }, [createBlockMutation, utils, initialDocument.id, blocks, clientId, syncBlockToYjs]);
-
-  // 使用 useRef 来管理防抖定时器
-  const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  const handleBlockUpdate = useCallback(async (blockId: string, updates: Partial<Block>) => {
-    try {
-      setError(null);
-      utils.documents.getDocumentBlocksPage.setData(
-        blocksQueryInput,
-        (oldData) => {
-          if (!oldData) return oldData;
-          return {
-            ...oldData,
-            blocks: oldData.blocks.map(block =>
-              block.id === blockId
-                ? { ...block, ...updates, updatedAt: new Date() }
-                : block
-            ),
-          };
+  const handleBlockCreate = useCallback(
+    async (blockData: Omit<Block, "id" | "createdAt" | "updatedAt">) => {
+      try {
+        if (!canEditDocument) {
+          setError("你没有编辑文档的权限");
+          setToastMessage("你没有编辑文档的权限");
+          return;
         }
-      );
 
-      if (updates.content && yBlocksRef.current && ydocRef.current) {
+        setError(null);
+
         const yBlocks = yBlocksRef.current;
+        if (!yBlocks) {
+          return;
+        }
+
+        const id =
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : Math.random().toString(36).slice(2);
+
+        const position = (() => {
+          if (typeof blockData.position === "number") {
+            return blockData.position;
+          }
+          const array = yBlocks.toArray() as Y.Map<unknown>[];
+          if (!array.length) {
+            return 0;
+          }
+          const max = array.reduce((acc, item) => {
+            const value = item.get("position");
+            if (typeof value === "number" && value > acc) {
+              return value;
+            }
+            return acc;
+          }, 0);
+          return max + 1;
+        })();
+
+        const yBlock = new Y.Map<unknown>();
+        yBlock.set("id", id);
+        yBlock.set("type", blockData.type);
+        yBlock.set("position", position);
+
+        const initialText = (() => {
+          if (blockData.type === "code") {
+            type CodeContent = {
+              code?: {
+                content?: string;
+              };
+            };
+            const value = blockData.content as unknown as CodeContent;
+            return value.code?.content ?? "";
+          }
+          type TextContent = {
+            text?: {
+              content?: string;
+            };
+          };
+          const value = blockData.content as unknown as TextContent;
+          return value.text?.content ?? "";
+        })();
+
+        const yText = new Y.Text(initialText);
+        yBlock.set("content", yText);
+
+        yBlocks.push([yBlock]);
+      } catch (err) {
+        console.error("Failed to create block:", err);
+        setError(
+          err instanceof Error ? err.message : "创建 Block 失败"
+        );
+      }
+    },
+    [canEditDocument]
+  );
+
+  const handleBlockCreateAfter = useCallback(
+    async (
+      afterBlockId: string,
+      blockData: Omit<Block, "id" | "createdAt" | "updatedAt">
+    ) => {
+      try {
+        if (!canEditDocument) {
+          setError("你没有编辑文档的权限");
+          setToastMessage("你没有编辑文档的权限");
+          return;
+        }
+
+        setError(null);
+
+        const yBlocks = yBlocksRef.current;
+        if (!yBlocks) {
+          return;
+        }
+
+        const array = yBlocks.toArray() as Y.Map<unknown>[];
+        const afterIndex = array.findIndex(
+          (item) => item.get("id") === afterBlockId
+        );
+
+        const id =
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : Math.random().toString(36).slice(2);
+
+        const insertIndex =
+          afterIndex >= 0 ? afterIndex + 1 : array.length;
+
+        const position = (() => {
+          const next = array[insertIndex];
+          const prev = array[insertIndex - 1];
+          const prevPos =
+            prev && typeof prev.get("position") === "number"
+              ? (prev.get("position") as number)
+              : insertIndex - 1;
+          const nextPos =
+            next && typeof next.get("position") === "number"
+              ? (next.get("position") as number)
+              : insertIndex;
+          if (Number.isFinite(prevPos) && Number.isFinite(nextPos)) {
+            return prevPos + (nextPos - prevPos) / 2;
+          }
+          return insertIndex;
+        })();
+
+        const yBlock = new Y.Map<unknown>();
+        yBlock.set("id", id);
+        yBlock.set("type", blockData.type);
+        yBlock.set("position", position);
+
+        const initialText = (() => {
+          if (blockData.type === "code") {
+            type CodeContent = {
+              code?: {
+                content?: string;
+              };
+            };
+            const value = blockData.content as unknown as CodeContent;
+            return value.code?.content ?? "";
+          }
+          type TextContent = {
+            text?: {
+              content?: string;
+            };
+          };
+          const value = blockData.content as unknown as TextContent;
+          return value.text?.content ?? "";
+        })();
+
+        const yText = new Y.Text(initialText);
+        yBlock.set("content", yText);
+
+        if (insertIndex >= yBlocks.length) {
+          yBlocks.push([yBlock]);
+        } else {
+          yBlocks.insert(insertIndex, [yBlock]);
+        }
+      } catch (err) {
+        console.error("Failed to create block after:", err);
+        setError(
+          err instanceof Error ? err.message : "创建 Block 失败"
+        );
+      }
+    },
+    [canEditDocument]
+  );
+
+  const handleBlockUpdate = useCallback(
+    async (blockId: string, updates: Partial<Block>) => {
+      try {
+        if (!canEditDocument) {
+          setError("你没有编辑文档的权限");
+          setToastMessage("你没有编辑文档的权限");
+          return;
+        }
+
+        setError(null);
+        utils.documents.getDocumentBlocksPage.setData(
+          blocksQueryInput,
+          (oldData) => {
+            if (!oldData) return oldData;
+            return {
+              ...oldData,
+              blocks: oldData.blocks.map((block) =>
+                block.id === blockId
+                  ? { ...block, ...updates, updatedAt: new Date() }
+                  : block
+              ),
+            };
+          }
+        );
+
+        const yBlocks = yBlocksRef.current;
+        if (!yBlocks) {
+          return;
+        }
+
         const array = yBlocks.toArray() as Y.Map<unknown>[];
         const target = array.find((item) => item.get("id") === blockId);
-        if (target) {
+        if (!target) {
+          return;
+        }
+
+        if (updates.type) {
+          target.set("type", updates.type);
+        }
+
+        if (typeof updates.position === "number") {
+          target.set("position", updates.position);
+        }
+
+        if (updates.content) {
           const content = target.get("content");
           const nextContent = updates.content as unknown;
           if (content instanceof Y.Text) {
@@ -568,49 +692,39 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
             }
           }
         }
-        return;
+      } catch (err) {
+        console.error("Failed to update block:", err);
+        setError(
+          err instanceof Error ? err.message : "更新 Block 失败"
+        );
+        await utils.documents.getDocumentBlocksPage.invalidate(
+          blocksQueryInput
+        );
       }
+    },
+    [canEditDocument, utils, blocksQueryInput]
+  );
 
-      if (updateTimeoutRef.current) {
-        clearTimeout(updateTimeoutRef.current);
-      }
-
-      updateTimeoutRef.current = setTimeout(async () => {
-        try {
-          const updatedBlock = await updateBlockMutation.mutateAsync({
-            id: blockId,
-            data: updates,
-            clientId,
-          });
-          syncBlockToYjs(updatedBlock as Block);
-          await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
-        } catch (err) {
-          console.error('Failed to update block on server:', err);
-          await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
+  const handleBlockDelete = useCallback(
+    async (blockId: string) => {
+      try {
+        if (!canEditDocument) {
+          setError("你没有编辑文档的权限");
+          setToastMessage("你没有编辑文档的权限");
+          return;
         }
-        updateTimeoutRef.current = null;
-      }, 500);
-    } catch (err) {
-      console.error('Failed to update block:', err);
-      setError(err instanceof Error ? err.message : '更新 Block 失败');
-      await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
-    }
-  }, [updateBlockMutation, utils, initialDocument.id, clientId, syncBlockToYjs]);
 
-  const handleBlockDelete = useCallback(async (blockId: string) => {
-    try {
-      setError(null);
-      await deleteBlockMutation.mutateAsync({
-        id: blockId,
-        clientId,
-      });
-      deleteBlockFromYjs(blockId);
-      await utils.documents.getDocumentBlocksPage.invalidate(blocksQueryInput);
-    } catch (err) {
-      console.error('Failed to delete block:', err);
-      setError(err instanceof Error ? err.message : '删除 Block 失败');
-    }
-  }, [deleteBlockMutation, utils, initialDocument.id, clientId, deleteBlockFromYjs]);
+        setError(null);
+        deleteBlockFromYjs(blockId);
+      } catch (err) {
+        console.error("Failed to delete block:", err);
+        setError(
+          err instanceof Error ? err.message : "删除 Block 失败"
+        );
+      }
+    },
+    [canEditDocument, deleteBlockFromYjs]
+  );
 
   useEffect(() => {
     void fetchOperations();
@@ -823,15 +937,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
     return () => clearTimeout(timer);
   }, [title, handleSave, initialDocument.title, canEditDocument]);
-
-  // 清理防抖定时器
-  useEffect(() => {
-    return () => {
-      if (updateTimeoutRef.current) {
-        clearTimeout(updateTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const getBlockTextContent = useCallback((block: Block | undefined) => {
     if (!block) {
