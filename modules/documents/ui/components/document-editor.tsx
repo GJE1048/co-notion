@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import * as Y from "yjs";
+import { WebsocketProvider } from "y-websocket";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +26,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const router = useRouter();
   const [title, setTitle] = useState(initialDocument.title);
   const [error, setError] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [isHeadingPopoverOpen, setIsHeadingPopoverOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
@@ -67,8 +70,33 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const visibleMembers = documentMembers.slice(0, 5);
   const extraMemberCount = documentMembers.length - visibleMembers.length;
   const { data: currentUser } = trpc.documents.getCurrentUserProfile.useQuery();
+  const canEditDocument = (() => {
+    if (!currentUser) {
+      return false;
+    }
+    const isDocOwner = initialDocument.ownerId === currentUser.id;
+    const workspaceEditor = workspaceRole === "creator" || workspaceRole === "admin";
+    const member = documentMembers.find((m) => m.id === currentUser.id);
+    const isDocOwnerFromMember = !!member?.isDocumentOwner;
+    const documentRole = member?.documentRole;
+    const workspaceRoleFromMember = member?.workspaceRole;
+    const isDocEditor =
+      documentRole === "owner" ||
+      documentRole === "editor";
+    const isWorkspaceEditorFromMember =
+      workspaceRoleFromMember === "creator" ||
+      workspaceRoleFromMember === "admin";
+    return isDocOwner || workspaceEditor || isDocOwnerFromMember || isDocEditor || isWorkspaceEditorFromMember;
+  })();
   const [onlineUsernames, setOnlineUsernames] = useState<string[]>([]);
   const hasPresence = onlineUsernames.length > 0;
+
+  const [yjsBlocksSnapshot, setYjsBlocksSnapshot] = useState<
+    { id: string; type: string; text: string }[]
+  >([]);
+
+  const ydocRef = useRef<Y.Doc | null>(null);
+  const yBlocksRef = useRef<Y.Array<Y.Map<unknown>> | null>(null);
 
   const blocks = useMemo(
     () => blocksData?.blocks || [],
@@ -202,7 +230,80 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     }
   }, [blocksData, blocksLoading, utils, initialDocument.id, clientId]);
 
+  const syncBlockToYjs = useCallback((block: Block) => {
+    const yBlocks = yBlocksRef.current;
+    if (!yBlocks) {
+      return;
+    }
+
+    const array = yBlocks.toArray() as Y.Map<unknown>[];
+    const existingIndex = array.findIndex((item) => item.get("id") === block.id);
+    let textContent = "";
+
+    if (block.type === "code") {
+      type CodeContent = {
+        code?: {
+          content?: string;
+        };
+      };
+      const value = block.content as unknown as CodeContent;
+      textContent = value.code?.content ?? "";
+    } else {
+      type TextContent = {
+        text?: {
+          content?: string;
+        };
+      };
+      const value = block.content as unknown as TextContent;
+      textContent = value.text?.content ?? "";
+    }
+
+    if (existingIndex >= 0) {
+      const yBlock = array[existingIndex];
+      yBlock.set("type", block.type);
+      yBlock.set("position", block.position);
+      const content = yBlock.get("content");
+      if (content instanceof Y.Text) {
+        content.delete(0, content.length);
+        content.insert(0, textContent);
+      } else {
+        const yText = new Y.Text(textContent);
+        yBlock.set("content", yText);
+      }
+      return;
+    }
+
+    const yBlock = new Y.Map<unknown>();
+    yBlock.set("id", block.id);
+    yBlock.set("type", block.type);
+    yBlock.set("position", block.position);
+    const yText = new Y.Text(textContent);
+    yBlock.set("content", yText);
+
+    yBlocks.push([yBlock]);
+  }, []);
+
+  const deleteBlockFromYjs = useCallback((blockId: string) => {
+    const yBlocks = yBlocksRef.current;
+    if (!yBlocks) {
+      return;
+    }
+
+    const array = yBlocks.toArray() as Y.Map<unknown>[];
+    const index = array.findIndex((item) => item.get("id") === blockId);
+    if (index === -1) {
+      return;
+    }
+
+    yBlocks.delete(index, 1);
+  }, []);
+
   const handleSave = useCallback(async () => {
+    if (!canEditDocument) {
+      setError("你没有编辑文档的权限");
+      setToastMessage("你没有编辑文档的权限");
+      return;
+    }
     try {
       setError(null);
 
@@ -213,14 +314,13 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         },
       });
 
-      // TODO: 保存 blocks（后续通过操作日志实现）
-      // 这里暂时只保存标题，blocks的保存会在操作日志系统中实现
-
       setLastSaved(new Date());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存文档时发生错误");
+      const message = err instanceof Error ? err.message : "保存文档时发生错误";
+      setError(message);
+      setToastMessage(message);
     }
-  }, [updateDocumentMutation, initialDocument.id, title]);
+  }, [canEditDocument, updateDocumentMutation, initialDocument.id, title]);
 
   const isSaving = updateDocumentMutation.isPending;
   const [isShareOpen, setIsShareOpen] = useState(false);
@@ -228,13 +328,14 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const isDuplicatingDocument = duplicateDocumentMutation.isPending;
 
   // Block 操作处理函数
-  const handleBlockCreate = useCallback(async (blockData: Omit<Block, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const handleBlockCreate = useCallback(async (blockData: Omit<Block, "id" | "createdAt" | "updatedAt">) => {
     try {
       setError(null);
-      await createBlockMutation.mutateAsync({
+      const newBlock = await createBlockMutation.mutateAsync({
         ...blockData,
         clientId,
       });
+      syncBlockToYjs(newBlock as Block);
       // 重新获取 blocks 数据 - 使用正确的路由
       await utils.dev.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
       // 也刷新文档blocks查询
@@ -243,10 +344,10 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       console.error('Failed to create block:', err);
       setError(err instanceof Error ? err.message : '创建 Block 失败');
     }
-  }, [createBlockMutation, utils, initialDocument.id, clientId]);
+  }, [createBlockMutation, utils, initialDocument.id, clientId, syncBlockToYjs]);
 
   // 在指定块之后创建新块
-  const handleBlockCreateAfter = useCallback(async (afterBlockId: string, blockData: Omit<Block, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const handleBlockCreateAfter = useCallback(async (afterBlockId: string, blockData: Omit<Block, "id" | "createdAt" | "updatedAt">) => {
     try {
       setError(null);
       // 获取当前块的位置，新块位置 = 当前块位置 + 1
@@ -261,10 +362,11 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         blockData.position = maxPosition + 1;
       }
       
-      await createBlockMutation.mutateAsync({
+      const newBlock = await createBlockMutation.mutateAsync({
         ...blockData,
         clientId,
       });
+      syncBlockToYjs(newBlock as Block);
       // 重新获取 blocks 数据 - 使用正确的路由
       await utils.dev.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
       await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
@@ -272,7 +374,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       console.error('Failed to create block after:', err);
       setError(err instanceof Error ? err.message : '创建 Block 失败');
     }
-  }, [createBlockMutation, utils, initialDocument.id, blocks, clientId]);
+  }, [createBlockMutation, utils, initialDocument.id, blocks, clientId, syncBlockToYjs]);
 
   // 使用 useRef 来管理防抖定时器
   const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -305,11 +407,12 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       // 使用防抖来减少频繁的服务器请求
       updateTimeoutRef.current = setTimeout(async () => {
         try {
-          await updateBlockMutation.mutateAsync({
+          const updatedBlock = await updateBlockMutation.mutateAsync({
             id: blockId,
             data: updates,
             clientId,
           });
+          syncBlockToYjs(updatedBlock as Block);
           // 服务器更新成功后，刷新数据确保一致性
           await utils.dev.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
           await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
@@ -326,7 +429,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       // 恢复数据
       await utils.dev.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
     }
-  }, [updateBlockMutation, utils, initialDocument.id, clientId]);
+  }, [updateBlockMutation, utils, initialDocument.id, clientId, syncBlockToYjs]);
 
   const handleBlockDelete = useCallback(async (blockId: string) => {
     try {
@@ -335,6 +438,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         id: blockId,
         clientId,
       });
+      deleteBlockFromYjs(blockId);
       // 重新获取 blocks 数据 - 使用正确的路由
       await utils.dev.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
       await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
@@ -342,11 +446,63 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       console.error('Failed to delete block:', err);
       setError(err instanceof Error ? err.message : '删除 Block 失败');
     }
-  }, [deleteBlockMutation, utils, initialDocument.id, clientId]);
+  }, [deleteBlockMutation, utils, initialDocument.id, clientId, deleteBlockFromYjs]);
 
   useEffect(() => {
     void fetchOperations();
   }, [fetchOperations]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const ydoc = new Y.Doc();
+    const wsUrl =
+      process.env.NEXT_PUBLIC_YJS_SERVER_WS_URL ||
+      `ws://${window.location.hostname}:1234`;
+
+    const provider = new WebsocketProvider(wsUrl, initialDocument.id, ydoc);
+    const yBlocks = ydoc.getArray<Y.Map<unknown>>("blocks");
+
+    ydocRef.current = ydoc;
+    yBlocksRef.current = yBlocks;
+
+    const handleUpdate = () => {
+      const array = yBlocks.toArray() as Y.Map<unknown>[];
+      const snapshot = array.map((item) => {
+        const id = (item.get("id") as string) || "";
+        const type = (item.get("type") as string) || "paragraph";
+        const content = item.get("content");
+        let text = "";
+
+        if (content instanceof Y.Text) {
+          text = content.toString();
+        } else if (typeof content === "string") {
+          text = content;
+        }
+
+        return {
+          id,
+          type,
+          text,
+        };
+      });
+
+      setYjsBlocksSnapshot(snapshot);
+    };
+
+    yBlocks.observe(handleUpdate);
+    handleUpdate();
+
+    return () => {
+      yBlocks.unobserve(handleUpdate);
+      yBlocksRef.current = null;
+      ydocRef.current = null;
+      provider.destroy();
+      ydoc.destroy();
+    };
+  }, [initialDocument.id]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -433,14 +589,25 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
   // 自动保存（简化版，后续会用操作日志替换）
   useEffect(() => {
+    if (!toastMessage) {
+      return;
+    }
     const timer = setTimeout(() => {
-      if (title !== initialDocument.title) {
-        handleSave();
-      }
-    }, 2000); // 2秒后自动保存
+      setToastMessage(null);
+    }, 3000);
 
     return () => clearTimeout(timer);
-  }, [title, handleSave, initialDocument.title]);
+  }, [toastMessage]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (canEditDocument && title !== initialDocument.title) {
+        handleSave();
+      }
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [title, handleSave, initialDocument.title, canEditDocument]);
 
   // 清理防抖定时器
   useEffect(() => {
@@ -507,7 +674,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
           )}
           <Button
             onClick={() => handleSave()}
-            disabled={isSaving || isLoading}
+            disabled={isSaving || isLoading || !canEditDocument}
             size="sm"
             className="flex items-center gap-2"
           >
@@ -609,6 +776,12 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       )}
 
       {/* 文档编辑器 */}
+      {toastMessage && (
+        <div className="fixed bottom-4 right-4 z-50 rounded-md bg-slate-900 text-white px-4 py-2 shadow-lg text-sm">
+          {toastMessage}
+        </div>
+      )}
+
       <Card className="shadow-lg border-0 bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm">
         <CardContent className="p-6">
           <div className="space-y-6">
@@ -617,6 +790,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
+              readOnly={!canEditDocument}
               placeholder="文档标题..."
               className="text-3xl font-semibold border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 h-auto bg-transparent"
             />
@@ -634,7 +808,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
                 onBlockUpdate={handleBlockUpdate}
                 onBlockDelete={handleBlockDelete}
                 onBlockCreateAfter={handleBlockCreateAfter}
-                readOnly={false}
+                readOnly={!canEditDocument}
               />
             )}
 
