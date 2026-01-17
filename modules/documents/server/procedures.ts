@@ -5,6 +5,7 @@ import { documents, blocks, workspaces, operations, users, documentCollaborators
 import { eq, and, desc, asc, sql, gt, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { notifyDocumentUpdated } from "@/realtime/notify";
+import { ensurePersonalWorkspace } from "@/lib/workspace";
 
 // Schema definitions
 const createDocumentSchema = z.object({
@@ -281,31 +282,39 @@ export const documentsRouter = createTRPCRouter({
       return { members };
     }),
 
-  // 创建新文档
+  // 创建新文档（支持基于模板复制）
   createDocument: protectedProcedure
     .input(createDocumentSchema)
     .mutation(async ({ ctx, input }) => {
-      // 如果没有指定工作区，使用用户的默认工作区
       let workspaceId = input.workspaceId;
       if (!workspaceId) {
-        const [defaultWorkspace] = await db
-          .select()
-          .from(workspaces)
-          .where(and(
-            eq(workspaces.ownerId, ctx.user.id),
-            eq(workspaces.isPersonal, true)
-          ));
-
-        if (!defaultWorkspace) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "未找到默认工作区",
-          });
-        }
-        workspaceId = defaultWorkspace.id;
+        const personalWorkspace = await ensurePersonalWorkspace(ctx.user.id);
+        workspaceId = personalWorkspace.id;
       }
 
-      // 创建文档
+      let templateDocument: typeof documents.$inferSelect | null = null;
+      let templateBlocks: typeof blocks.$inferSelect[] = [];
+
+      if (input.templateId) {
+        const [doc] = await db
+          .select()
+          .from(documents)
+          .where(and(
+            eq(documents.isTemplate, true),
+            sql`${documents.metadata}->>'templateKey' = ${input.templateId}`
+          ));
+
+        if (doc) {
+          templateDocument = doc;
+
+          templateBlocks = await db
+            .select()
+            .from(blocks)
+            .where(eq(blocks.documentId, doc.id))
+            .orderBy(blocks.position);
+        }
+      }
+
       const [newDocument] = await db
         .insert(documents)
         .values({
@@ -314,21 +323,35 @@ export const documentsRouter = createTRPCRouter({
           ownerId: ctx.user.id,
           isTemplate: false,
           isArchived: false,
-          permissions: { public: false, team: true },
-          metadata: {},
+          permissions: templateDocument ? templateDocument.permissions : { public: false, team: true },
+          metadata: templateDocument ? templateDocument.metadata : {},
         })
         .returning();
 
-      // 创建默认的标题 Block
-      await db.insert(blocks).values({
-        documentId: newDocument.id,
-        type: 'heading_1',
-        content: { text: { content: input.title } },
-        properties: {},
-        position: 0,
-        version: 1,
-        createdBy: ctx.user.id,
-      });
+      if (templateBlocks.length > 0) {
+        await db.insert(blocks).values(
+          templateBlocks.map((b) => ({
+            documentId: newDocument.id,
+            parentId: b.parentId,
+            type: b.type,
+            content: b.content,
+            properties: b.properties,
+            position: b.position,
+            version: 1,
+            createdBy: ctx.user.id,
+          })),
+        );
+      } else {
+        await db.insert(blocks).values({
+          documentId: newDocument.id,
+          type: 'heading_1',
+          content: { text: { content: input.title } },
+          properties: {},
+          position: 0,
+          version: 1,
+          createdBy: ctx.user.id,
+        });
+      }
 
       return newDocument;
     }),
@@ -824,24 +847,7 @@ export const documentsRouter = createTRPCRouter({
 
       const doc = access.document;
 
-      let [personalWs] = await db
-        .select()
-        .from(workspaces)
-        .where(and(eq(workspaces.ownerId, ctx.user.id), eq(workspaces.isPersonal, true)))
-        .limit(1);
-
-      if (!personalWs) {
-        [personalWs] = await db
-          .insert(workspaces)
-          .values({
-            name: "我的工作区",
-            ownerId: ctx.user.id,
-            isPersonal: true,
-            permissions: { public: false, team: true },
-            metadata: {},
-          })
-          .returning();
-      }
+      const personalWs = await ensurePersonalWorkspace(ctx.user.id);
 
       const [newDoc] = await db
         .insert(documents)
@@ -927,24 +933,7 @@ export const documentsRouter = createTRPCRouter({
       }
 
       if (input.copyToPersonal) {
-        let [personalWs] = await db
-          .select()
-          .from(workspaces)
-          .where(and(eq(workspaces.ownerId, target.id), eq(workspaces.isPersonal, true)))
-          .limit(1);
-
-        if (!personalWs) {
-          [personalWs] = await db
-            .insert(workspaces)
-            .values({
-              name: "我的工作区",
-              ownerId: target.id,
-              isPersonal: true,
-              permissions: { public: false, team: true },
-              metadata: {},
-            })
-            .returning();
-        }
+        const personalWs = await ensurePersonalWorkspace(target.id);
 
         const [newDoc] = await db
           .insert(documents)

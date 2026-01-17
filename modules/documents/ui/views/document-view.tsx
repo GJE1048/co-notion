@@ -9,12 +9,11 @@ interface DocumentViewProps {
 }
 
 export const DocumentView = ({ documentId }: DocumentViewProps) => {
-  // 在开发环境中使用开发模式的查询绕过认证
   const {
     data: document,
     isLoading: documentLoading,
     error: documentError
-  } = trpc.dev.getDocument.useQuery({ id: documentId });
+  } = trpc.documents.getDocument.useQuery({ id: documentId });
 
   if (documentError) {
     if (documentError.data?.code === "NOT_FOUND") {

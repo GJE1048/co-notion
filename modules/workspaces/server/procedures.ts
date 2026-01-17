@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { workspaces, documents, tags, documentTags, users, workspaceMembers } from "@/db/schema";
 import { eq, and, desc, sql, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { DEFAULT_WORKSPACE_PERMISSIONS, ensurePersonalWorkspace } from "@/lib/workspace";
 
 const createWorkspaceSchema = z.object({
   name: z.string().min(1, "工作区名称不能为空"),
@@ -106,7 +107,7 @@ export const workspacesRouter = createTRPCRouter({
           name: input.name,
           ownerId: ctx.user.id,
           isPersonal: input.isPersonal,
-          permissions: { public: false, team: true },
+          permissions: DEFAULT_WORKSPACE_PERMISSIONS,
           metadata: {},
         })
         .returning();
@@ -237,25 +238,9 @@ export const workspacesRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       let workspaceId = input.workspaceId;
 
-      // 如果没有指定工作区，使用用户的默认工作区（通过 clerkId）
       if (!workspaceId) {
-        const [defaultWorkspace] = await db
-          .select({
-            workspace: workspaces,
-          })
-          .from(workspaces)
-          .where(and(
-            eq(workspaces.ownerId, ctx.user.id),
-            eq(workspaces.isPersonal, true)
-          ));
-
-        if (!defaultWorkspace) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "未找到默认工作区",
-          });
-        }
-        workspaceId = defaultWorkspace.workspace.id;
+        const personalWorkspace = await ensurePersonalWorkspace(ctx.user.id);
+        workspaceId = personalWorkspace.id;
       }
 
       // 验证工作区权限（通过 clerkId）

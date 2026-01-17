@@ -103,7 +103,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     data: blocksData,
     isLoading: blocksLoading,
     error: blocksError
-  } = trpc.dev.getDocumentBlocks.useQuery({
+  } = trpc.documents.getDocumentBlocks.useQuery({
     documentId: initialDocument.id
   });
 
@@ -223,7 +223,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         return;
       }
 
-      utils.dev.getDocumentBlocks.setData(
+      utils.documents.getDocumentBlocks.setData(
         { documentId: initialDocument.id },
         (oldData) => {
           if (!oldData) {
@@ -407,9 +407,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         clientId,
       });
       syncBlockToYjs(newBlock as Block);
-      // 重新获取 blocks 数据 - 使用正确的路由
-      await utils.dev.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
-      // 也刷新文档blocks查询
       await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
     } catch (err) {
       console.error('Failed to create block:', err);
@@ -438,8 +435,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         clientId,
       });
       syncBlockToYjs(newBlock as Block);
-      // 重新获取 blocks 数据 - 使用正确的路由
-      await utils.dev.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
       await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
     } catch (err) {
       console.error('Failed to create block after:', err);
@@ -454,8 +449,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     try {
       setError(null);
       
-      // 乐观更新：立即更新本地缓存
-      utils.dev.getDocumentBlocks.setData(
+      utils.documents.getDocumentBlocks.setData(
         { documentId: initialDocument.id },
         (oldData) => {
           if (!oldData) return oldData;
@@ -484,21 +478,17 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
             clientId,
           });
           syncBlockToYjs(updatedBlock as Block);
-          // 服务器更新成功后，刷新数据确保一致性
-          await utils.dev.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
           await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
         } catch (err) {
           console.error('Failed to update block on server:', err);
-          // 如果服务器更新失败，重新获取数据恢复状态
-          await utils.dev.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
+          await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
         }
         updateTimeoutRef.current = null;
       }, 500); // 500ms 防抖
     } catch (err) {
       console.error('Failed to update block:', err);
       setError(err instanceof Error ? err.message : '更新 Block 失败');
-      // 恢复数据
-      await utils.dev.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
+      await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
     }
   }, [updateBlockMutation, utils, initialDocument.id, clientId, syncBlockToYjs]);
 
@@ -510,8 +500,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         clientId,
       });
       deleteBlockFromYjs(blockId);
-      // 重新获取 blocks 数据 - 使用正确的路由
-      await utils.dev.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
       await utils.documents.getDocumentBlocks.invalidate({ documentId: initialDocument.id });
     } catch (err) {
       console.error('Failed to delete block:', err);

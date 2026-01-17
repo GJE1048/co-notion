@@ -165,6 +165,218 @@ WHERE NOT EXISTS (
     SELECT 1 FROM blocks b WHERE b.document_id = d.id
 );
 
+INSERT INTO workspaces (name, owner_id, is_personal, permissions, metadata)
+SELECT '系统模板', u.id, FALSE, '{"public": false, "team": true}', '{"type": "system_templates"}'
+FROM users u
+WHERE NOT EXISTS (
+    SELECT 1 FROM workspaces w WHERE w.metadata->>'type' = 'system_templates'
+)
+LIMIT 1;
+
+WITH tpl_ws AS (
+    SELECT id, owner_id FROM workspaces WHERE metadata->>'type' = 'system_templates' LIMIT 1
+)
+INSERT INTO documents (id, title, workspace_id, owner_id, is_template, is_archived, permissions, metadata)
+SELECT gen_random_uuid(), '会议纪要', tpl_ws.id, tpl_ws.owner_id, TRUE, FALSE,
+       '{"public": false, "team": true}'::jsonb,
+       jsonb_build_object('templateKey', 'meeting-notes')
+FROM tpl_ws
+WHERE NOT EXISTS (
+    SELECT 1 FROM documents d WHERE d.is_template = TRUE AND d.metadata->>'templateKey' = 'meeting-notes'
+);
+
+WITH tpl_ws AS (
+    SELECT id, owner_id FROM workspaces WHERE metadata->>'type' = 'system_templates' LIMIT 1
+)
+INSERT INTO documents (id, title, workspace_id, owner_id, is_template, is_archived, permissions, metadata)
+SELECT gen_random_uuid(), '课程笔记', tpl_ws.id, tpl_ws.owner_id, TRUE, FALSE,
+       '{"public": false, "team": true}'::jsonb,
+       jsonb_build_object('templateKey', 'course-notes')
+FROM tpl_ws
+WHERE NOT EXISTS (
+    SELECT 1 FROM documents d WHERE d.is_template = TRUE AND d.metadata->>'templateKey' = 'course-notes'
+);
+
+WITH tpl_ws AS (
+    SELECT id, owner_id FROM workspaces WHERE metadata->>'type' = 'system_templates' LIMIT 1
+)
+INSERT INTO documents (id, title, workspace_id, owner_id, is_template, is_archived, permissions, metadata)
+SELECT gen_random_uuid(), '小说大纲', tpl_ws.id, tpl_ws.owner_id, TRUE, FALSE,
+       '{"public": false, "team": true}'::jsonb,
+       jsonb_build_object('templateKey', 'novel-outline')
+FROM tpl_ws
+WHERE NOT EXISTS (
+    SELECT 1 FROM documents d WHERE d.is_template = TRUE AND d.metadata->>'templateKey' = 'novel-outline'
+);
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_1',
+    jsonb_build_object('text', jsonb_build_object('content', '会议纪要')),
+    0,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'meeting-notes'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id
+  );
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_2',
+    jsonb_build_object('text', jsonb_build_object('content', '基本信息')),
+    1,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'meeting-notes'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id AND b.position = 1
+  );
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_2',
+    jsonb_build_object('text', jsonb_build_object('content', '议题与讨论要点')),
+    2,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'meeting-notes'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id AND b.position = 2
+  );
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_2',
+    jsonb_build_object('text', jsonb_build_object('content', '待办事项与负责人')),
+    3,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'meeting-notes'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id AND b.position = 3
+  );
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_1',
+    jsonb_build_object('text', jsonb_build_object('content', '课程笔记')),
+    0,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'course-notes'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id
+  );
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_2',
+    jsonb_build_object('text', jsonb_build_object('content', '课程信息')),
+    1,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'course-notes'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id AND b.position = 1
+  );
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_2',
+    jsonb_build_object('text', jsonb_build_object('content', '课堂重点内容')),
+    2,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'course-notes'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id AND b.position = 2
+  );
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_2',
+    jsonb_build_object('text', jsonb_build_object('content', '作业与思考')),
+    3,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'course-notes'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id AND b.position = 3
+  );
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_1',
+    jsonb_build_object('text', jsonb_build_object('content', '小说大纲')),
+    0,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'novel-outline'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id
+  );
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_2',
+    jsonb_build_object('text', jsonb_build_object('content', '世界观与背景')),
+    1,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'novel-outline'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id AND b.position = 1
+  );
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_2',
+    jsonb_build_object('text', jsonb_build_object('content', '主要角色设定')),
+    2,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'novel-outline'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id AND b.position = 2
+  );
+
+INSERT INTO blocks (document_id, type, content, position, created_by)
+SELECT
+    d.id,
+    'heading_2',
+    jsonb_build_object('text', jsonb_build_object('content', '剧情阶段与转折点')),
+    3,
+    d.owner_id
+FROM documents d
+WHERE d.is_template = TRUE
+  AND d.metadata->>'templateKey' = 'novel-outline'
+  AND NOT EXISTS (
+      SELECT 1 FROM blocks b WHERE b.document_id = d.id AND b.position = 3
+  );
+
 -- 添加工作区成员表
 CREATE TABLE IF NOT EXISTS workspace_members (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -517,6 +517,199 @@ CREATE INDEX idx_snapshots_document_version ON document_snapshots(document_id, v
 - 需要审批
 - 实时通知
 
+## 性能优化：Redis 缓存与 Block 分页加载
+
+### 1. 目标与整体思路
+
+- 典型慢场景: 打开大文档时一次性加载大量 Block, 首次响应时间可能达到 5～10 秒。
+- 优化目标: 通过后端 Redis 缓存和 Block 分页加载, 将 TTFB 压到 100ms 级别, 让大文档的首次渲染可控、可渐进。
+- 技术选型: 使用 Upstash 提供的 serverless Redis 服务 (`@upstash/redis`), 结合 TRPC 文档接口实现缓存层。
+
+整体思路:
+- 后端在读取文档和 Block 列表时优先查询 Redis, 未命中再访问 Postgres。
+- 为大文档只加载首屏前若干个 Block, 后续通过分页或增量加载补齐。
+- 文档更新后同步清理对应缓存 key, 保证数据一致性。
+
+### 2. Upstash Redis 集成方案
+
+#### 2.1 环境配置
+
+1. 在 Upstash 控制台创建 Redis 数据库, 获取:
+   - `UPSTASH_REDIS_REST_URL`
+   - `UPSTASH_REDIS_REST_TOKEN`
+2. 在 `.env.local` 中添加或更新:
+
+```env
+UPSTASH_REDIS_REST_URL="https://xxx.upstash.io"
+UPSTASH_REDIS_REST_TOKEN="your-token"
+```
+
+项目已经在 `package.json` 中引入了 `@upstash/redis` 依赖, 一般不需要额外安装。如果需要单独安装, 可以执行:
+
+```bash
+pnpm add @upstash/redis
+```
+
+#### 2.2 Redis 客户端封装
+
+在 `lib/redis.ts` 中封装单例 Redis 客户端, 供 TRPC 过程调用:
+
+```typescript
+import { Redis } from "@upstash/redis";
+
+export const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
+```
+
+在服务端代码中统一从 `lib/redis` 引入, 避免重复初始化。
+
+### 3. 文档读取接口的缓存设计
+
+#### 3.1 文档元数据缓存
+
+适用接口: 单文档查询, 如 `documents.getDocument`.
+
+缓存策略:
+- key 设计: `doc:{documentId}`
+- value 内容: 文档元数据和必要的权限信息 (不包含大块内容)
+- TTL: 30～60 秒, 在保证新鲜度的前提下提升命中率
+
+伪代码示例:
+
+```typescript
+const cacheKey = `doc:${input.id}`;
+const cached = await redis.get(cacheKey);
+
+if (cached) {
+  return cached;
+}
+
+const document = await db.query.documents.findFirst({
+  where: eq(documents.id, input.id),
+});
+
+if (!document) {
+  throw new TRPCError({ code: "NOT_FOUND" });
+}
+
+await redis.setex(cacheKey, 60, document);
+
+return document;
+```
+
+集成方式:
+- 在 TRPC `documents` 路由中, 为只读查询接口增加缓存逻辑。
+- 所有涉及文档基础信息的页面 (主页最近文档列表、文档详情入口) 都会自然受益。
+
+#### 3.2 Block 列表缓存 (首屏)
+
+适用接口: 文档 Block 列表查询, 如 `documents.getDocumentBlocks`.
+
+首屏缓存策略:
+- 只缓存第 1 页 Block 数据 (例如前 30 条)。
+- key 设计: `blocks:${documentId}:page:1`
+- value 内容: 排序后的 Block 列表 JSON。
+- TTL: 30～60 秒。
+
+伪代码示例:
+
+```typescript
+const cacheKey = `blocks:${input.documentId}:page:1`;
+const cached = await redis.get(cacheKey);
+
+if (cached) {
+  return cached;
+}
+
+const blocks = await db.query.blocks.findMany({
+  where: eq(blocks.documentId, input.documentId),
+  orderBy: asc(blocks.position),
+  limit: 30,
+});
+
+await redis.setex(cacheKey, 60, blocks);
+
+return blocks;
+```
+
+这样在用户频繁打开同一文档时, 后端可以直接从 Redis 返回首屏 Block, 避免每次都访问数据库并进行排序。
+
+### 4. Block 分页加载设计
+
+Block 分页的目标是让首屏渲染成本与文档总大小解耦, 保证大文档的可用性。
+
+#### 4.1 API 设计
+
+在 Block 查询接口中增加分页参数, 建议使用基于游标的分页:
+
+```typescript
+interface GetBlocksInput {
+  documentId: string;
+  cursor?: number;
+  limit?: number;
+}
+```
+
+后端查询示例:
+
+```typescript
+const limit = input.limit ?? 30;
+
+const rows = await db.query.blocks.findMany({
+  where: eq(blocks.documentId, input.documentId),
+  orderBy: asc(blocks.position),
+  limit,
+  offset: input.cursor ?? 0,
+});
+```
+
+前端使用方式:
+- 初次打开文档时仅请求 `{ documentId, cursor: 0, limit: 30 }`, 渲染首屏内容。
+- 监听滚动或用户交互, 在需要时请求下一页 `{ cursor: 30 }`, 依次追加到本地 Block 树。
+- 可以结合 Yjs 或本地状态对 Block 列表进行增量更新。
+
+#### 4.2 Redis 与分页的组合
+
+推荐策略:
+- 只为第 1 页 Block 开启 Redis 缓存, 后续页直接查数据库。
+- 若文档体量极大并且访问非常频繁, 可以按页缓存前几页:
+  - `blocks:${documentId}:page:1`
+  - `blocks:${documentId}:page:2`
+  - `blocks:${documentId}:page:3`
+
+这样既能显著降低 TTFB, 又不会在 Redis 中存放过多冷数据。
+
+### 5. 缓存失效与一致性策略
+
+任何会改变文档结构或内容的写操作, 都需要同步清理相关缓存 key。
+
+典型场景:
+- 文档标题、权限、元信息更新。
+- Block 内容更新。
+- Block 新增或删除。
+- Block 位置调整。
+
+失效策略示例:
+
+```typescript
+await redis.del(`doc:${documentId}`);
+await redis.del(`blocks:${documentId}:page:1`);
+```
+
+如果为多页 Block 启用了缓存, 可以使用模式匹配或在业务代码中维护需要删除的 key 列表。
+
+### 6. 预期效果与监控建议
+
+预期效果:
+- 首次打开某个大文档: 仍然需要访问数据库, 但配合索引和分页, 延迟显著降低。
+- 随后 30～60 秒内再次打开同一文档: TTFB 下降到 100ms 左右, 主要耗时来自网络和 JSON 解码。
+
+监控建议:
+- 在文档读取和 Block 查询接口中记录耗时日志, 对比开启 Redis 前后的请求分布。
+- 对慢查询增加简单的统计, 定期审查是否需要扩展缓存范围或调整 TTL。
+
 ## API 接口设计
 
 ### 文档管理 API

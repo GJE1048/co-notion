@@ -1,10 +1,7 @@
-import { db } from "@/db";
 import { auth } from "@clerk/nextjs/server";
 import { initTRPC, TRPCError } from "@trpc/server";
-import { eq, and } from "drizzle-orm";
 import { cache } from "react";
 import superjson from "superjson";
-import { workspaces } from '@/db/schema';
 import { ratelimit } from "@/lib/ratelimit";
 import { ensureUserExists } from "@/lib/user-sync";
 
@@ -61,32 +58,6 @@ export const protectedProcedure = t.procedure.use(async function isAuth(opts) {
     // 使用 ensureUserExists 确保用户存在，如果不存在则自动创建
     const user = await ensureUserExists(ctx.clerkUserId);
 
-    // 检查并创建默认工作区
-    let [defaultWorkspace] = await db
-        .select()
-        .from(workspaces)
-        .where(and(
-            eq(workspaces.ownerId, user.id),
-            eq(workspaces.isPersonal, true)
-        ))
-        .limit(1);
-
-    if (!defaultWorkspace) {
-        // 如果没有默认工作区，创建一个
-        [defaultWorkspace] = await db
-            .insert(workspaces)
-            .values({
-                name: "我的工作区",
-                ownerId: user.id,
-                isPersonal: true,
-                permissions: { public: false, team: true },
-                metadata: {},
-            })
-            .returning();
-
-        console.log(`为用户 ${user.username} 创建了默认工作区: ${defaultWorkspace.name}`);
-    }
-
     // 只在 rate limiter 可用时进行限制检查
     if (ratelimit) {
       try {
@@ -110,8 +81,6 @@ export const protectedProcedure = t.procedure.use(async function isAuth(opts) {
         ctx:{
             ...ctx,
             user,
-            defaultWorkspace
-        } as ProtectedContext & { defaultWorkspace: typeof defaultWorkspace }
+        } as ProtectedContext
     })
 })
-

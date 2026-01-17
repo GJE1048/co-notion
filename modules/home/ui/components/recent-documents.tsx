@@ -26,18 +26,16 @@ export const RecentDocuments = ({ documents: initialDocuments }: RecentDocuments
   const router = useRouter();
   const { isSignedIn, isLoaded } = useAuth();
 
-  // 使用 tRPC 查询获取用户文档
   const {
-    data: documents,
+    data: dashboard,
     isLoading,
     error,
     refetch
-  } = trpc.documents.getUserDocuments.useQuery(undefined, {
+  } = trpc.home.getDashboardData.useQuery(undefined, {
     enabled: isSignedIn && isLoaded,
   });
 
-  // 优先使用 tRPC 查询的数据，如果没有则使用初始数据（服务端传递的）
-  const recentDocuments = documents || initialDocuments || [];
+  const recentDocuments = dashboard?.recentDocuments || initialDocuments || [];
 
   const handleDocumentClick = (documentId: string) => {
     if (!isLoaded) return;

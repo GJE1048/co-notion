@@ -17,7 +17,7 @@ interface WorkspaceStats {
 
 export const WorkspaceOverview = () => {
   const { isSignedIn, isLoaded } = useAuth();
-  const { data: documents, isLoading } = trpc.documents.getUserDocuments.useQuery(
+  const { data: dashboard, isLoading } = trpc.home.getDashboardData.useQuery(
     undefined,
     {
       enabled: isSignedIn && isLoaded,
@@ -25,10 +25,10 @@ export const WorkspaceOverview = () => {
   );
 
   const stats: WorkspaceStats = {
-    totalDocuments: documents?.length || 0,
+    totalDocuments: dashboard?.stats.totalDocuments || 0,
     totalFolders: 0,
-    activeDocuments: documents?.length || 0,
-    storageUsed: ((documents?.length || 0) * 50) / 1024 / 1024,
+    activeDocuments: dashboard?.stats.activeDocuments || 0,
+    storageUsed: ((dashboard?.stats.totalDocuments || 0) * 50) / 1024 / 1024,
     storageLimit: 10,
   };
 
