@@ -103,7 +103,7 @@ export const DocumentsView = () => {
           workspaceId: null as string | null,
           workspaceName: "我的文档",
           isPersonal: true,
-          workspaceRole: "creator",
+          workspaceRole: "creator" as "creator" | "admin" | "viewer",
           documents,
         },
       ];
@@ -125,6 +125,7 @@ export const DocumentsView = () => {
         workspaceId: null as string | null,
         workspaceName: "未分配工作区",
         isPersonal: false,
+        workspaceRole: "creator" as "creator" | "admin" | "viewer",
         documents: unassignedDocuments,
       });
     }
@@ -385,23 +386,25 @@ export const DocumentsView = () => {
                               )}
                             </div>
                           </Link>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-sm"
-                            className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setActiveDocumentMenuId((current) =>
-                                current === doc.id ? null : doc.id
-                              );
-                            }}
-                          >
-                            <MoreHorizontal className="size-4" />
-                          </Button>
+                          {(group.workspaceRole === "creator" || group.workspaceRole === "admin" || group.isPersonal) && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setActiveDocumentMenuId((current) =>
+                                  current === doc.id ? null : doc.id
+                                );
+                              }}
+                            >
+                              <MoreHorizontal className="size-4" />
+                            </Button>
+                          )}
                         </div>
-                        {activeDocumentMenuId === doc.id && (
+                        {activeDocumentMenuId === doc.id && (group.workspaceRole === "creator" || group.workspaceRole === "admin" || group.isPersonal) && (
                           <div className="absolute top-2 right-2 z-20 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-md py-1 min-w-[140px]">
                             <button
                               type="button"

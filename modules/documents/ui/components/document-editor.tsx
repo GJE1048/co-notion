@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Loader2, Save, ArrowLeft, Plus, Heading1, List, Code, Share, Copy, Trash2 } from "lucide-react";
 import { trpc } from "@/trpc/client";
 import { BlockEditor } from "./block-editor";
@@ -29,7 +30,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const [confirmCopyOpen, setConfirmCopyOpen] = useState(false);
   const [inviteLink, setInviteLink] = useState("");
 
-  // 使用 tRPC 获取文档 blocks（开发模式下使用绕过认证的查询）
   const {
     data: blocksData,
     isLoading: blocksLoading,
@@ -38,7 +38,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     documentId: initialDocument.id
   });
 
-  // Block 操作 mutations
   const createBlockMutation = trpc.documents.createBlock.useMutation();
   const updateBlockMutation = trpc.blocks.updateBlock.useMutation();
   const deleteBlockMutation = trpc.blocks.deleteBlock.useMutation();
@@ -54,10 +53,23 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     },
   });
 
+  const { data: userWorkspaces } = trpc.workspaces.getUserWorkspaces.useQuery();
+  const { data: documentMembersData } = trpc.documents.getDocumentMembers.useQuery({
+    documentId: initialDocument.id,
+  });
+
+  const currentWorkspace = userWorkspaces?.find((ws) => ws.id === initialDocument.workspaceId);
+  const workspaceRole = currentWorkspace?.userRole ?? "creator";
+  const canManageDocument = workspaceRole === "creator" || workspaceRole === "admin";
+
+  const documentMembers = documentMembersData?.members ?? [];
+  const documentOwner = documentMembers.find((m) => m.isDocumentOwner);
+  const visibleMembers = documentMembers.slice(0, 5);
+  const extraMemberCount = documentMembers.length - visibleMembers.length;
+
   const blocks = blocksData?.blocks || [];
   const isLoading = blocksLoading;
 
-  // 使用 tRPC 的查询重获取功能
   const utils = trpc.useUtils();
 
   const [clientId] = useState(() => {
@@ -79,13 +91,10 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const currentVersionRef = useRef(0);
   const hasInitializedVersionRef = useRef(false);
 
-  // 处理加载错误 - 在渲染时直接显示，不需要 useEffect
-
   const handleSave = useCallback(async () => {
     try {
       setError(null);
 
-      // 保存文档标题
       await updateDocumentMutation.mutateAsync({
         id: initialDocument.id,
         data: {
@@ -383,36 +392,40 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
               已保存 {lastSaved.toLocaleTimeString()}
             </span>
           )}
-          <Button
-            onClick={() => setConfirmCopyOpen(true)}
-            disabled={isLoading}
-            size="sm"
-            variant="outline"
-            className="flex items-center gap-2"
-          >
-            <Copy className="size-4" />
-            复制
-          </Button>
-          <Button
-            onClick={() => setConfirmDeleteOpen(true)}
-            disabled={isLoading}
-            size="sm"
-            variant="destructive"
-            className="flex items-center gap-2"
-          >
-            <Trash2 className="size-4" />
-            删除
-          </Button>
-          <Button
-            onClick={() => setIsShareOpen(true)}
-            disabled={isLoading}
-            size="sm"
-            variant="outline"
-            className="flex items-center gap-2"
-          >
-            <Share className="size-4" />
-            分享
-          </Button>
+          {canManageDocument && (
+            <>
+              <Button
+                onClick={() => setConfirmCopyOpen(true)}
+                disabled={isLoading}
+                size="sm"
+                variant="outline"
+                className="flex items-center gap-2"
+              >
+                <Copy className="size-4" />
+                复制
+              </Button>
+              <Button
+                onClick={() => setConfirmDeleteOpen(true)}
+                disabled={isLoading}
+                size="sm"
+                variant="destructive"
+                className="flex items-center gap-2"
+              >
+                <Trash2 className="size-4" />
+                删除
+              </Button>
+              <Button
+                onClick={() => setIsShareOpen(true)}
+                disabled={isLoading}
+                size="sm"
+                variant="outline"
+                className="flex items-center gap-2"
+              >
+                <Share className="size-4" />
+                分享
+              </Button>
+            </>
+          )}
           <Button
             onClick={() => handleSave()}
             disabled={isSaving || isLoading}
@@ -432,6 +445,77 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
             )}
           </Button>
         </div>
+      </div>
+
+      <div className="flex items-center justify-between text-sm text-slate-600 dark:text-slate-400">
+        <div>
+          {documentOwner && (
+            <span>
+              文档拥有者：{documentOwner.username}
+            </span>
+          )}
+        </div>
+        {documentMembers.length > 0 && (
+          <div className="flex items-center justify-end gap-2">
+            <div className="flex -space-x-2">
+              {visibleMembers.map((member) => {
+                const roles: string[] = [];
+
+                if (member.isDocumentOwner) {
+                  roles.push("文档拥有者");
+                } else if (member.documentRole === "owner") {
+                  roles.push("协作者");
+                }
+
+                if (member.workspaceRole === "creator") {
+                  roles.push("工作区创建者");
+                } else if (member.workspaceRole === "admin") {
+                  roles.push("管理员");
+                } else if (member.workspaceRole === "editor") {
+                  roles.push("编辑者");
+                } else if (member.workspaceRole === "viewer") {
+                  roles.push("查看者");
+                }
+
+                const roleLabel = roles.join(" / ") || "成员";
+                const initials = member.username ? member.username.charAt(0).toUpperCase() : "成员";
+
+                return (
+                  <Tooltip key={member.id}>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="relative inline-flex size-8 items-center justify-center rounded-full border-2 border-white bg-slate-200 text-xs font-medium text-slate-700 overflow-hidden shadow-sm dark:border-slate-900 dark:bg-slate-700 dark:text-slate-50"
+                        aria-label={`${member.username}（${roleLabel}）`}
+                      >
+                        {member.imageUrl ? (
+                          <img
+                            src={member.imageUrl}
+                            alt={member.username}
+                            className="size-full object-cover"
+                          />
+                        ) : (
+                          <span>{initials}</span>
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" align="end">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-medium">{member.username}</span>
+                        <span className="text-xs opacity-80">{roleLabel}</span>
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              })}
+            </div>
+            {extraMemberCount > 0 && (
+              <div className="inline-flex size-8 items-center justify-center rounded-full border-2 border-white bg-slate-100 text-xs font-medium text-slate-500 shadow-sm dark:border-slate-900 dark:bg-slate-800 dark:text-slate-200">
+                +{extraMemberCount}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {(error || blocksError) && (

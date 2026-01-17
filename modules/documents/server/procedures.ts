@@ -45,6 +45,24 @@ const updateBlockSchema = z.object({
   position: z.number().optional(),
 });
 
+type DocumentAccessRecord = {
+  document: typeof documents.$inferSelect;
+  workspace: typeof workspaces.$inferSelect | null;
+  collaborator: typeof documentCollaborators.$inferSelect | null;
+  workspaceMember: typeof workspaceMembers.$inferSelect | null;
+};
+
+const canManageDocument = (record: DocumentAccessRecord | undefined, userId: string) => {
+  if (!record) return false;
+  const { document, workspace, collaborator, workspaceMember } = record;
+  if (!document) return false;
+  if (document.ownerId === userId) return true;
+  if (workspace && workspace.ownerId === userId) return true;
+  if (collaborator && collaborator.userId === userId && collaborator.role === "owner") return true;
+  if (workspaceMember && workspaceMember.userId === userId && workspaceMember.role === "admin") return true;
+  return false;
+};
+
 export const documentsRouter = createTRPCRouter({
   // 获取用户的所有文档
   getUserDocuments: protectedProcedure
@@ -121,6 +139,128 @@ export const documentsRouter = createTRPCRouter({
       }
 
       return document;
+    }),
+
+  getDocumentMembers: protectedProcedure
+    .input(z.object({ documentId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const [documentRecord] = await db
+        .select({
+          document: documents,
+          workspace: workspaces,
+        })
+        .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(and(
+          eq(documents.id, input.documentId),
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
+        ));
+
+      if (!documentRecord) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "文档不存在",
+        });
+      }
+
+      const document = documentRecord.document;
+      const workspace = documentRecord.workspace;
+
+      const membersMap = new Map<string, {
+        id: string;
+        username: string;
+        imageUrl: string;
+        isDocumentOwner: boolean;
+        workspaceRole: string | null;
+        documentRole: string | null;
+      }>();
+
+      const documentOwner = await db
+        .select({
+          id: users.id,
+          username: users.username,
+          imageUrl: users.imageUrl,
+        })
+        .from(users)
+        .where(eq(users.id, document.ownerId));
+
+      if (documentOwner[0]) {
+        membersMap.set(documentOwner[0].id, {
+          id: documentOwner[0].id,
+          username: documentOwner[0].username,
+          imageUrl: documentOwner[0].imageUrl,
+          isDocumentOwner: true,
+          workspaceRole: workspace && workspace.ownerId === documentOwner[0].id ? "creator" : null,
+          documentRole: "owner",
+        });
+      }
+
+      if (workspace) {
+        const workspaceMembersWithUser = await db
+          .select({
+            id: users.id,
+            username: users.username,
+            imageUrl: users.imageUrl,
+            role: workspaceMembers.role,
+          })
+          .from(workspaceMembers)
+          .innerJoin(users, eq(workspaceMembers.userId, users.id))
+          .where(eq(workspaceMembers.workspaceId, workspace.id));
+
+        for (const wm of workspaceMembersWithUser) {
+          const existing = membersMap.get(wm.id);
+          membersMap.set(wm.id, {
+            id: wm.id,
+            username: wm.username,
+            imageUrl: wm.imageUrl,
+            isDocumentOwner: existing ? existing.isDocumentOwner : false,
+            workspaceRole: wm.role,
+            documentRole: existing ? existing.documentRole : null,
+          });
+        }
+      }
+
+      const collaboratorsWithUser = await db
+        .select({
+          id: users.id,
+          username: users.username,
+          imageUrl: users.imageUrl,
+          role: documentCollaborators.role,
+        })
+        .from(documentCollaborators)
+        .innerJoin(users, eq(documentCollaborators.userId, users.id))
+        .where(eq(documentCollaborators.documentId, document.id));
+
+      for (const collab of collaboratorsWithUser) {
+        const existing = membersMap.get(collab.id);
+        membersMap.set(collab.id, {
+          id: collab.id,
+          username: collab.username,
+          imageUrl: collab.imageUrl,
+          isDocumentOwner: existing ? existing.isDocumentOwner : false,
+          workspaceRole: existing ? existing.workspaceRole : null,
+          documentRole: collab.role,
+        });
+      }
+
+      const members = Array.from(membersMap.values());
+
+      members.sort((a, b) => {
+        if (a.isDocumentOwner && !b.isDocumentOwner) return -1;
+        if (!a.isDocumentOwner && b.isDocumentOwner) return 1;
+        if (a.workspaceRole === "admin" && b.workspaceRole !== "admin") return -1;
+        if (a.workspaceRole !== "admin" && b.workspaceRole === "admin") return 1;
+        return a.username.localeCompare(b.username, "zh-CN");
+      });
+
+      return { members };
     }),
 
   // 创建新文档
@@ -222,7 +362,12 @@ export const documentsRouter = createTRPCRouter({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const [existingDocument] = await db
-        .select()
+        .select({
+          document: documents,
+          workspace: workspaces,
+          collaborator: documentCollaborators,
+          workspaceMember: workspaceMembers,
+        })
         .from(documents)
         .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
         .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
@@ -241,6 +386,13 @@ export const documentsRouter = createTRPCRouter({
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "文档不存在",
+        });
+      }
+
+       if (!canManageDocument(existingDocument, ctx.user.id)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "无权限删除文档",
         });
       }
 
@@ -621,14 +773,36 @@ export const documentsRouter = createTRPCRouter({
       documentId: z.string(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const [doc] = await db
-        .select()
+      const [access] = await db
+        .select({
+          document: documents,
+          workspace: workspaces,
+          collaborator: documentCollaborators,
+          workspaceMember: workspaceMembers,
+        })
         .from(documents)
-        .where(and(eq(documents.id, input.documentId), eq(documents.ownerId, ctx.user.id)));
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(and(
+          eq(documents.id, input.documentId),
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
+        ));
 
-      if (!doc) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "文档不存在或无权限" });
+      if (!access) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "文档不存在" });
       }
+
+      if (!canManageDocument(access, ctx.user.id)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "无权限复制文档" });
+      }
+
+      const doc = access.document;
 
       let [personalWs] = await db
         .select()
@@ -692,14 +866,36 @@ export const documentsRouter = createTRPCRouter({
       copyToPersonal: z.boolean().default(true),
     }))
     .mutation(async ({ ctx, input }) => {
-      const [doc] = await db
-        .select()
+      const [access] = await db
+        .select({
+          document: documents,
+          workspace: workspaces,
+          collaborator: documentCollaborators,
+          workspaceMember: workspaceMembers,
+        })
         .from(documents)
-        .where(and(eq(documents.id, input.documentId), eq(documents.ownerId, ctx.user.id)));
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(and(
+          eq(documents.id, input.documentId),
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
+        ));
 
-      if (!doc) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "文档不存在或无权限" });
+      if (!access) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "文档不存在" });
       }
+
+      if (!canManageDocument(access, ctx.user.id)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "无权限分享文档" });
+      }
+
+      const doc = access.document;
 
       const [target] = await db
         .select()
