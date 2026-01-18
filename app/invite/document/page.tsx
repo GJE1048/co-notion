@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth, SignInButton } from "@clerk/nextjs";
 import { trpc } from "@/trpc/client";
@@ -23,16 +22,6 @@ const DocumentInvitePage = () => {
       }
     },
   });
-
-  useEffect(() => {
-    if (!isLoaded) return;
-    if (!documentId) return;
-    if (!isSignedIn) return;
-    if (acceptMutation.isPending || acceptMutation.isSuccess) return;
-    acceptMutation.mutate({
-      documentId,
-    });
-  }, [isLoaded, isSignedIn, documentId, acceptMutation]);
 
   if (!documentId) {
     return (
@@ -92,12 +81,43 @@ const DocumentInvitePage = () => {
     <div className="min-h-screen flex items-center justify-center">
       <Card className="max-w-md w-full">
         <CardHeader>
-          <CardTitle>正在加入文档协作...</CardTitle>
+          <CardTitle>加入文档协作</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <p className="text-sm text-slate-600 dark:text-slate-400">
-            正在接受邀请并跳转到文档页面，请稍候。
+            你收到一个文档协作邀请，是否将该文档添加到你的文档列表中？
           </p>
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              variant="outline"
+              disabled={acceptMutation.isPending}
+              onClick={() => {
+                router.replace("/documents");
+              }}
+            >
+              暂不加入
+            </Button>
+            <Button
+              disabled={acceptMutation.isPending}
+              onClick={() => {
+                if (!documentId) return;
+                acceptMutation.mutate({
+                  documentId,
+                });
+              }}
+            >
+              {acceptMutation.isPending ? (
+                "正在加入..."
+              ) : (
+                "接受并加入"
+              )}
+            </Button>
+          </div>
+          {acceptMutation.error && (
+            <p className="text-xs text-red-600 dark:text-red-400">
+              {acceptMutation.error.message}
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

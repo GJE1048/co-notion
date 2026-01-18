@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FlameIcon, HomeIcon, PlaySquareIcon } from "lucide-react";
+import { FlameIcon, HomeIcon, PlaySquareIcon, Share2Icon } from "lucide-react";
 
 import {
   SidebarGroup,
@@ -22,6 +22,11 @@ const items = [
     title: "Documents",
     url: "/documents",
     icon: PlaySquareIcon,
+  },
+  {
+    title: "共享文档",
+    url: "/documents/shared",
+    icon: Share2Icon,
   },
   {
     title: "Templates",

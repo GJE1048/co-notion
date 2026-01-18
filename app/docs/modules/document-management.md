@@ -227,6 +227,125 @@ interface RelationEdge {
 }
 ```
 
+### 6. 文档共享与共享工作区
+
+> 说明：本节重点描述文档共享的业务模型与前端交互设计。关于“谁可以发起分享、修改他人权限、撤回分享”等具体权限规则，请参考[用户权限与安全控制模块](./permissions.md)中的“文档共享权限控制”小节。
+
+#### 6.1 数据模型与状态
+
+在文档共享场景中，不复制文档实体，而是通过“共享邀请 + 权限记录”来描述“哪份文档被分享给了谁、处于什么状态、拥有何种权限”：
+
+```typescript
+// 文档共享邀请 / 权限记录
+interface DocumentShare {
+  id: string;
+  documentId: string;
+  fromUserId: string;
+  toUserId: string;
+  level: PermissionLevel; // VIEWER/COMMENTER/EDITOR/ADMIN
+  status: 'pending' | 'accepted' | 'declined' | 'revoked';
+  createdAt: Date;
+  updatedAt: Date;
+  viewedAt?: Date;     // 被分享者首次查看时间
+  acceptedAt?: Date;   // 被分享者确认接收时间
+}
+
+// 分享统计视图（供前端“共享文档”页面使用）
+interface SharedDocumentSummary {
+  documentId: string;
+  title: string;
+  fromUserId: string;
+  shares: Array<{
+    toUserId: string;
+    level: PermissionLevel;
+    status: 'pending' | 'accepted' | 'declined' | 'revoked';
+    viewedAt?: Date;
+    acceptedAt?: Date;
+  }>;
+}
+```
+
+- 同一份文档可以对应多条 DocumentShare 记录，每条记录表示一次“分享给某个用户”的行为。
+- `status='pending'` 表示被分享用户尚未在系统中明确“接受”这份文档；`accepted` 表示已加入对方工作区。
+- `level` 字段与权限模块的五级权限体系对齐，用于控制被分享用户在该文档上的操作能力。
+
+#### 6.2 分享者视角：共享文档管理入口
+
+在侧边栏或顶部导航中增加一个“共享文档”入口，点击后进入“文档分享管理页”，主要职责：
+
+- 展示当前用户作为分享发起人的所有共享记录（fromUserId = currentUserId）。
+- 按文档聚合，列表项包含：
+  - 文档标题、位置、创建时间等基础信息
+  - 每个被分享用户的状态：
+    - 是否查看（viewedAt 是否存在）
+    - 是否接受（status 是否为 accepted）
+    - 当前权限等级（level）
+- 支持常见操作：
+  - 修改某个被分享用户的权限等级（例如从 VIEWER 升级为 EDITOR）
+  - 撤回对某个用户的分享（status 变更为 revoked）
+  - 批量撤回整份文档的所有分享记录
+
+典型页面结构：
+
+- 左侧：文档列表（仅展示当前用户发起分享的文档）
+- 右侧：选中文档的分享详情，包括：
+  - 已分享给哪些用户
+  - 每个用户的查看状态/接受状态/权限等级
+  - 修改权限、撤回分享的操作入口
+
+为支撑上述功能，后端需要提供：
+
+- `GET /documents/shared-by-me`：返回 SharedDocumentSummary 列表
+- `PATCH /documents/:id/shares/:shareId`：允许 OWNER/ADMIN 修改 `level` 或撤回分享
+- 在权限模块中约束：只有 OWNER/ADMIN 才能调整他人权限或撤回分享
+
+#### 6.3 被分享者视角：共享文档加入工作区
+
+被分享的用户通常通过“分享链接”进入文档。当系统识别到当前登录用户为分享目标（存在 `toUserId = currentUserId` 的 DocumentShare 记录）时，需要弹出确认对话框：
+
+- 文案示例：
+  - “X 邀请你协作编辑文档《XXX》，是否将该文档添加到你的工作区？”
+- 行为选项：
+  - “接受并加入我的文档”
+  - “暂不加入”/“拒绝”
+
+接受行为效果：
+
+- 将对应的 DocumentShare 记录状态更新为 `accepted`，记录 `acceptedAt`。
+- 将该文档加入当前用户的文档工作区视图中，常见实现方式：
+  - 直接归入“我的文档”工作区，并在元数据中标记 `source: 'shared'`，前端可用于筛选/展示；或
+  - 为每个用户维护一个虚拟/实体的“共享文档”工作区，专门聚合所有 `status='accepted'` 的共享文档。
+- 更新权限缓存，使后续访问该文档时，后端根据 DocumentShare 记录授予相应的权限级别。
+
+拒绝行为效果：
+
+- 将 DocumentShare 状态更新为 `declined`，可选地仍允许通过原始链接只读访问，也可以直接收回访问能力，视产品策略而定。
+- 不将文档加入任何工作区列表。
+
+对应后端接口示例：
+
+- `POST /documents/shares/:shareId/accept`
+- `POST /documents/shares/:shareId/decline`
+
+#### 6.4 共享文档的可见性与权限校验
+
+所有文档读取接口在权限校验时需要统一考虑共享场景：
+
+- 当前用户为文档所有者（ownerId = currentUserId）；或
+- 存在 DocumentShare 记录：`documentId = id AND toUserId = currentUserId AND status = 'accepted'`。
+
+对于编辑、评论等操作，则需要进一步对比 DocumentShare.level 与权限映射表（见权限模块文档），例如：
+
+- `level >= EDITOR` 才允许内容编辑；
+- `level >= COMMENTER` 才允许发表评论；
+- 仅 OWNER/ADMIN 可以修改其他用户的 DocumentShare.level 或撤回分享。
+
+在前端导航中，“我的文档”与“共享文档”可以共存：
+
+- “我的文档”：展示当前用户为所有者的文档集合。
+- “共享文档”：展示当前用户通过 DocumentShare.accepted 获得访问权限的文档集合。
+- 如果希望简化初始实现，也可以暂时只保留“我的文档”入口，将共享文档混合展示，并通过标签/筛选条件区分来源。
+
 ## 前端架构设计
 
 ### Block 编辑器组件

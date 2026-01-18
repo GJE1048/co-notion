@@ -96,22 +96,24 @@ export const DocumentsView = () => {
   };
 
   const workspaceGroups = useMemo(() => {
-    if (!workspaces || workspaces.length === 0) {
-      if (!documents || documents.length === 0) return [];
+    if (!documents || documents.length === 0) return [];
+
+    const allDocuments = documents;
+    const userWorkspaces = workspaces || [];
+
+    if (userWorkspaces.length === 0) {
       return [
         {
           workspaceId: null as string | null,
           workspaceName: "我的文档",
           isPersonal: true,
           workspaceRole: "creator" as "creator" | "admin" | "viewer",
-          documents,
+          documents: allDocuments,
         },
       ];
     }
 
-    const allDocuments = documents ?? [];
-
-    const groups = workspaces.map((ws) => ({
+    const groups = userWorkspaces.map((ws) => ({
       workspaceId: ws.id as string | null,
       workspaceName: ws.name,
       isPersonal: ws.isPersonal,
@@ -122,11 +124,26 @@ export const DocumentsView = () => {
     const unassignedDocuments = allDocuments.filter((doc) => !doc.workspace?.id);
     if (unassignedDocuments.length > 0) {
       groups.unshift({
-        workspaceId: null as string | null,
+        workspaceId: "unassigned" as string | null,
         workspaceName: "未分配工作区",
         isPersonal: false,
         workspaceRole: "creator" as "creator" | "admin" | "viewer",
         documents: unassignedDocuments,
+      });
+    }
+
+    const sharedDocuments = allDocuments.filter((doc) => {
+      if (!doc.workspace?.id) return false;
+      return !userWorkspaces.some((ws) => ws.id === doc.workspace?.id);
+    });
+
+    if (sharedDocuments.length > 0) {
+      groups.push({
+        workspaceId: "shared" as string | null,
+        workspaceName: "共享文档",
+        isPersonal: false,
+        workspaceRole: "viewer" as "creator" | "admin" | "viewer",
+        documents: sharedDocuments,
       });
     }
 
@@ -341,9 +358,13 @@ export const DocumentsView = () => {
             <section key={group.workspaceId ?? "unknown"} className="space-y-3">
               <div className="flex items-baseline justify-between">
                 <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-                  {group.isPersonal ? "我的文档" : group.workspaceName}
+                  {group.workspaceId === "shared"
+                    ? "共享文档"
+                    : group.isPersonal
+                    ? "我的文档"
+                    : group.workspaceName}
                 </h2>
-                {!group.isPersonal && group.workspaceRole && (
+                {group.workspaceId !== "shared" && !group.isPersonal && group.workspaceRole && (
                   <span className="text-xs text-slate-500 dark:text-slate-400">
                     {group.workspaceRole === "creator"
                       ? "创建者"
@@ -379,7 +400,11 @@ export const DocumentsView = () => {
                               <span>
                                 更新时间：{new Date(doc.updatedAt).toLocaleDateString()}
                               </span>
-                              {doc.workspace && (
+                              {group.workspaceId === "shared" ? (
+                                <span className="text-slate-400 dark:text-slate-500">
+                                  共享文档
+                                </span>
+                              ) : doc.workspace && (
                                 <span className="text-slate-400 dark:text-slate-500">
                                   {doc.workspace.name}
                                 </span>
