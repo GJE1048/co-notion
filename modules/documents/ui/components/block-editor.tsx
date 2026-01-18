@@ -14,6 +14,8 @@ type RemoteCursor = {
   blockId: string;
   username: string;
   color: string;
+   anchor?: number;
+   head?: number;
 };
 
 interface BlockEditorProps {
@@ -27,6 +29,7 @@ interface BlockEditorProps {
   ) => void;
   onBlockFocus?: (blockId: string) => void;
   remoteCursors?: RemoteCursor[];
+  onSelectionChange?: (blockId: string, anchor: number, head: number) => void;
   readOnly?: boolean;
 }
 
@@ -38,6 +41,7 @@ interface BlockComponentProps {
   onFocus?: () => void;
   remoteCursors?: RemoteCursor[];
   readOnly?: boolean;
+  onSelectionChange?: (anchor: number, head: number) => void;
 }
 
 // 单个 Block 组件
@@ -49,8 +53,21 @@ const BlockComponent = ({
   onFocus,
   remoteCursors,
   readOnly,
+  onSelectionChange,
 }: BlockComponentProps) => {
   const [isEditing, setIsEditing] = useState(false);
+
+  const handleSelectionChange = useCallback(
+    (target: HTMLTextAreaElement | HTMLInputElement) => {
+      if (!onSelectionChange) {
+        return;
+      }
+      const anchor = target.selectionStart ?? 0;
+      const head = target.selectionEnd ?? anchor;
+      onSelectionChange(anchor, head);
+    },
+    [onSelectionChange]
+  );
 
   // 监听创建新块的全局事件
   useEffect(() => {
@@ -67,7 +84,7 @@ const BlockComponent = ({
     };
   }, [block.id, onCreateAfter]);
 
-  const handleContentUpdate = useCallback((newContent: Record<string, any>) => {
+  const handleContentUpdate = useCallback((newContent: Record<string, unknown>) => {
     // 立即更新，不等待防抖
     onUpdate({
       content: newContent,
@@ -79,10 +96,12 @@ const BlockComponent = ({
       case 'heading_1':
         return (
           <Input
-            value={(block.content as any)?.text?.content || ''}
+            value={(block.content as { text?: { content?: string } })?.text?.content || ''}
             onChange={(e) => handleContentUpdate({
               text: { content: e.target.value }
             })}
+            onSelect={(e) => handleSelectionChange(e.currentTarget)}
+            onKeyUp={(e) => handleSelectionChange(e.currentTarget)}
             className="text-3xl font-bold border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 h-auto bg-transparent"
             placeholder="一级标题"
             readOnly={readOnly}
@@ -92,10 +111,12 @@ const BlockComponent = ({
       case 'heading_2':
         return (
           <Input
-            value={(block.content as any)?.text?.content || ''}
+            value={(block.content as { text?: { content?: string } })?.text?.content || ''}
             onChange={(e) => handleContentUpdate({
               text: { content: e.target.value }
             })}
+            onSelect={(e) => handleSelectionChange(e.currentTarget)}
+            onKeyUp={(e) => handleSelectionChange(e.currentTarget)}
             className="text-2xl font-semibold border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 h-auto bg-transparent"
             placeholder="二级标题"
             readOnly={readOnly}
@@ -105,10 +126,12 @@ const BlockComponent = ({
       case 'heading_3':
         return (
           <Input
-            value={(block.content as any)?.text?.content || ''}
+            value={(block.content as { text?: { content?: string } })?.text?.content || ''}
             onChange={(e) => handleContentUpdate({
               text: { content: e.target.value }
             })}
+            onSelect={(e) => handleSelectionChange(e.currentTarget)}
+            onKeyUp={(e) => handleSelectionChange(e.currentTarget)}
             className="text-xl font-medium border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 h-auto bg-transparent"
             placeholder="三级标题"
             readOnly={readOnly}
@@ -117,19 +140,19 @@ const BlockComponent = ({
 
       case 'paragraph':
         return (
-          <Textarea
-            value={(block.content as any)?.text?.content || ''}
-            onChange={(e) => handleContentUpdate({
-              text: { content: e.target.value }
-            })}
-            onKeyDown={(e) => {
+            <Textarea
+              value={(block.content as { text?: { content?: string } })?.text?.content || ''}
+              onChange={(e) => handleContentUpdate({
+                text: { content: e.target.value }
+              })}
+              onKeyDown={(e) => {
               // 在段落末尾按 Enter 时创建新段落
               if (e.key === 'Enter' && !e.shiftKey && !readOnly) {
-                const content = (block.content as any)?.text?.content || '';
+                const content = (block.content as { text?: { content?: string } })?.text?.content || '';
                 const cursorPosition = e.currentTarget.selectionStart;
                 const isAtEnd = cursorPosition === content.length;
                 
-                if (isAtEnd && content.trim() !== '') {
+                if (isAtEnd && typeof content === 'string' && content.trim() !== '') {
                   e.preventDefault();
                   // 触发创建新段落的回调（通过父组件处理）
                   const event = new CustomEvent('createBlockAfter', {
@@ -139,6 +162,8 @@ const BlockComponent = ({
                 }
               }
             }}
+            onSelect={(e) => handleSelectionChange(e.currentTarget)}
+            onKeyUp={(e) => handleSelectionChange(e.currentTarget)}
             className="min-h-[2rem] resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 bg-transparent text-base leading-relaxed"
             placeholder="开始输入内容... (按 Enter 创建新段落)"
             readOnly={readOnly}
@@ -151,10 +176,12 @@ const BlockComponent = ({
             <pre className="bg-slate-100 dark:bg-slate-800 p-4 rounded-lg overflow-x-auto">
               <code className="text-sm">
                 <Textarea
-                  value={(block.content as any)?.code?.content || ''}
+                  value={(block.content as { code?: { content?: string; language?: string } })?.code?.content || ''}
                   onChange={(e) => handleContentUpdate({
-                    code: { content: e.target.value, language: (block.content as any)?.code?.language || 'javascript' }
+                    code: { content: e.target.value, language: (block.content as { code?: { language?: string } })?.code?.language || 'javascript' }
                   })}
+                  onSelect={(e) => handleSelectionChange(e.currentTarget)}
+                  onKeyUp={(e) => handleSelectionChange(e.currentTarget)}
                   className="min-h-[4rem] resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 bg-transparent font-mono text-sm"
                   placeholder="输入代码..."
                   readOnly={readOnly}
@@ -168,10 +195,12 @@ const BlockComponent = ({
         return (
           <div className="border-l-4 border-slate-300 pl-4 italic">
             <Textarea
-              value={(block.content as any)?.text?.content || ''}
+              value={(block.content as { text?: { content?: string } })?.text?.content || ''}
               onChange={(e) => handleContentUpdate({
                 text: { content: e.target.value }
               })}
+              onSelect={(e) => handleSelectionChange(e.currentTarget)}
+              onKeyUp={(e) => handleSelectionChange(e.currentTarget)}
               className="min-h-[2rem] resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 bg-transparent italic"
               placeholder="输入引用内容..."
               readOnly={readOnly}
@@ -182,18 +211,20 @@ const BlockComponent = ({
       case 'list':
         return (
           <div className="space-y-1">
-            {(block.content as any)?.list?.items?.map((item: string, index: number) => (
+            {(block.content as { list?: { items?: string[] } })?.list?.items?.map((item: string, index: number) => (
               <div key={index} className="flex items-start gap-2">
                 <span className="text-slate-500 mt-0.5">•</span>
                 <Input
                   value={item}
                   onChange={(e) => {
-                    const newItems = [...((block.content as any)?.list?.items || [])];
+                    const newItems = [...(((block.content as { list?: { items?: string[] } })?.list?.items) || [])];
                     newItems[index] = e.target.value;
                     handleContentUpdate({
                       list: { items: newItems }
                     });
                   }}
+                  onSelect={(e) => handleSelectionChange(e.currentTarget)}
+                  onKeyUp={(e) => handleSelectionChange(e.currentTarget)}
                   className="border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 bg-transparent"
                   placeholder="列表项..."
                   readOnly={readOnly}
@@ -206,6 +237,8 @@ const BlockComponent = ({
                   onChange={(e) => handleContentUpdate({
                     list: { items: [e.target.value] }
                   })}
+                  onSelect={(e) => handleSelectionChange(e.currentTarget)}
+                  onKeyUp={(e) => handleSelectionChange(e.currentTarget)}
                   className="border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 bg-transparent"
                   placeholder="列表项..."
                   readOnly={readOnly}
@@ -218,13 +251,13 @@ const BlockComponent = ({
       case 'todo':
         return (
           <div className="space-y-1">
-            {(block.content as any)?.todo?.items?.map((item: any, index: number) => (
+            {(block.content as { todo?: { items?: { text?: string; checked?: boolean }[] } })?.todo?.items?.map((item: { text?: string; checked?: boolean }, index: number) => (
               <div key={index} className="flex items-start gap-2">
                 <input
                   type="checkbox"
                   checked={item.checked || false}
                   onChange={(e) => {
-                    const newItems = [...((block.content as any)?.todo?.items || [])];
+                    const newItems = [...(((block.content as { todo?: { items?: { text?: string; checked?: boolean }[] } })?.todo?.items) || [])];
                     newItems[index] = { ...newItems[index], checked: e.target.checked };
                     handleContentUpdate({
                       todo: { items: newItems }
@@ -236,12 +269,14 @@ const BlockComponent = ({
                 <Input
                   value={item.text || ''}
                   onChange={(e) => {
-                    const newItems = [...((block.content as any)?.todo?.items || [])];
+                    const newItems = [...(((block.content as { todo?: { items?: { text?: string; checked?: boolean }[] } })?.todo?.items) || [])];
                     newItems[index] = { ...newItems[index], text: e.target.value };
                     handleContentUpdate({
                       todo: { items: newItems }
                     });
                   }}
+                  onSelect={(e) => handleSelectionChange(e.currentTarget)}
+                  onKeyUp={(e) => handleSelectionChange(e.currentTarget)}
                   className={`border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 bg-transparent ${
                     item.checked ? 'line-through text-slate-500' : ''
                   }`}
@@ -260,6 +295,8 @@ const BlockComponent = ({
                   onChange={(e) => handleContentUpdate({
                     todo: { items: [{ text: e.target.value, checked: false }] }
                   })}
+                  onSelect={(e) => handleSelectionChange(e.currentTarget)}
+                  onKeyUp={(e) => handleSelectionChange(e.currentTarget)}
                   className="border-0 focus-visible:ring-0 focus-visible:ring-offset-0 p-0 bg-transparent"
                   placeholder="待办事项..."
                   readOnly={readOnly}
@@ -277,10 +314,10 @@ const BlockComponent = ({
       case 'image':
         return (
           <div className="space-y-2">
-            {(block.content as any)?.image?.url ? (
+            {(block.content as { image?: { url?: string; caption?: string } })?.image?.url ? (
               <img
-                src={(block.content as any)?.image?.url}
-                alt={(block.content as any)?.image?.caption || ''}
+                src={(block.content as { image?: { url?: string } })?.image?.url}
+                alt={(block.content as { image?: { caption?: string } })?.image?.caption || ''}
                 className="max-w-full h-auto rounded-lg"
               />
             ) : (
@@ -297,12 +334,12 @@ const BlockComponent = ({
                 />
               </div>
             )}
-            {(block.content as any)?.image?.caption && (
+            {(block.content as { image?: { caption?: string } })?.image?.caption && (
               <Input
-                value={(block.content as any)?.image?.caption || ''}
+                value={(block.content as { image?: { caption?: string } })?.image?.caption || ''}
                 onChange={(e) => handleContentUpdate({
                   image: {
-                    url: (block.content as any)?.image?.url,
+                    url: (block.content as { image?: { url?: string } })?.image?.url,
                     caption: e.target.value
                   }
                 })}
@@ -323,19 +360,18 @@ const BlockComponent = ({
     }
   };
 
+  const hasRemoteCursors = !!remoteCursors && remoteCursors.length > 0;
+  const mainCursor = hasRemoteCursors ? remoteCursors[0] : undefined;
+  const hasRemoteSelection =
+    !!remoteCursors?.some(
+      (cursor) =>
+        typeof cursor.anchor === "number" &&
+        typeof cursor.head === "number" &&
+        cursor.anchor !== cursor.head
+    );
+
   return (
     <div className="group relative py-2 hover:bg-slate-50/50 dark:hover:bg-slate-800/30 rounded-lg transition-colors">
-      {remoteCursors && remoteCursors.length > 0 && (
-        <div className="absolute -left-2 top-2 flex -space-x-1">
-          {remoteCursors.slice(0, 3).map((cursor) => (
-            <div
-              key={`${block.id}-${cursor.username}`}
-              className="size-3 rounded-full border border-white shadow-sm"
-              style={{ backgroundColor: cursor.color }}
-            />
-          ))}
-        </div>
-      )}
       {/* Block 工具栏 */}
       {!readOnly && (
         <div className="absolute -left-12 top-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
@@ -364,12 +400,32 @@ const BlockComponent = ({
 
       {/* Block 内容 */}
       <div
-        className="px-2"
+        className={`px-2 relative ${
+          hasRemoteSelection ? "bg-slate-100/60 dark:bg-slate-800/40" : ""
+        }`}
         onFocus={() => {
           setIsEditing(false);
           onFocus?.();
         }}
       >
+        {mainCursor && (
+          <div
+            className="absolute -left-1 top-0 bottom-0 w-0.5 rounded-full"
+            style={{ backgroundColor: mainCursor.color }}
+          />
+        )}
+        {hasRemoteCursors && mainCursor && (
+          <div className="absolute -left-1 -top-4 flex items-center gap-1">
+            <span
+              className="rounded-full px-2 py-0.5 text-[10px] font-medium text-white shadow-sm"
+              style={{ backgroundColor: mainCursor.color }}
+            >
+              {remoteCursors.length === 1
+                ? mainCursor.username
+                : `${mainCursor.username} 等 ${remoteCursors.length} 人`}
+            </span>
+          </div>
+        )}
         {renderBlockContent()}
       </div>
 
@@ -451,11 +507,12 @@ export const BlockEditor = ({
   onBlockCreateAfter,
   onBlockFocus,
   remoteCursors = [],
+  onSelectionChange,
   readOnly = false
 }: BlockEditorProps) => {
   const sortedBlocks = [...blocks].sort((a, b) => a.position - b.position);
 
-  const handleCreateAfter = useCallback((afterBlockId: string, type: string) => {
+  const handleCreateAfter = useCallback((afterBlockId: string, type: Block["type"]) => {
     if (!onBlockCreateAfter) return;
     
     const afterBlock = sortedBlocks.find(b => b.id === afterBlockId);
@@ -468,7 +525,7 @@ export const BlockEditor = ({
     onBlockCreateAfter(afterBlockId, {
       documentId: afterBlock.documentId,
       parentId: afterBlock.parentId,
-      type: type as any,
+      type: type,
       content: type === 'paragraph' 
         ? { text: { content: '' } }
         : type === 'heading_1'
@@ -496,6 +553,11 @@ export const BlockEditor = ({
           onCreateAfter={(type) => handleCreateAfter(block.id, type)}
           remoteCursors={remoteCursors.filter((cursor) => cursor.blockId === block.id)}
           onFocus={() => onBlockFocus?.(block.id)}
+          onSelectionChange={
+            onSelectionChange
+              ? (anchor, head) => onSelectionChange(block.id, anchor, head)
+              : undefined
+          }
           readOnly={readOnly}
         />
       ))}

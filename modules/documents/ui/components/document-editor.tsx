@@ -82,6 +82,8 @@ type AwarenessUserState = {
 
 type AwarenessCursorState = {
   blockId?: string;
+  anchor?: number;
+  head?: number;
 };
 
 type AwarenessState = {
@@ -199,7 +201,9 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   })();
   const [onlineUsernames, setOnlineUsernames] = useState<string[]>([]);
   const hasPresence = onlineUsernames.length > 0;
-  const [remoteCursors, setRemoteCursors] = useState<{ blockId: string; username: string; color: string }[]>([]);
+  const [remoteCursors, setRemoteCursors] = useState<
+    { blockId: string; username: string; color: string; anchor?: number; head?: number }[]
+  >([]);
 
   const [yjsBlocksSnapshot, setYjsBlocksSnapshot] = useState<
     { id: string; type: string; text: string }[]
@@ -594,6 +598,27 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
     yBlocks.delete(index, 1);
   }, []);
+
+  const handleBlockSelectionChange = useCallback(
+    (blockId: string, anchor: number, head: number) => {
+      const awareness = awarenessRef.current;
+      if (!awareness) {
+        return;
+      }
+      const prevState = awareness.getLocalState() || {};
+      const nextState: AwarenessState = {
+        ...(prevState as AwarenessState),
+        cursor: {
+          blockId,
+          anchor,
+          head,
+        },
+      };
+      awareness.setLocalState(nextState);
+      setSelectedBlockId(blockId);
+    },
+    []
+  );
 
   const handleSave = useCallback(async () => {
     if (!canEditDocument) {
@@ -1012,7 +1037,13 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     const handleAwarenessChange = () => {
       const states = Array.from(awareness.getStates().values());
       const usernames = new Set<string>();
-      const cursors: { blockId: string; username: string; color: string }[] = [];
+      const cursors: {
+        blockId: string;
+        username: string;
+        color: string;
+        anchor?: number;
+        head?: number;
+      }[] = [];
       const localUser = currentUserRef.current;
       const localUserId = localUser?.id;
       states.forEach((rawState) => {
@@ -1044,6 +1075,8 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
             blockId: cursor.blockId,
             username,
             color,
+            anchor: typeof cursor.anchor === "number" ? cursor.anchor : undefined,
+            head: typeof cursor.head === "number" ? cursor.head : undefined,
           });
         }
       });
@@ -1759,6 +1792,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
                     onBlockCreateAfter={handleBlockCreateAfter}
                     onBlockFocus={setSelectedBlockId}
                     remoteCursors={remoteCursors}
+                    onSelectionChange={handleBlockSelectionChange}
                     readOnly={!canEditDocument}
                   />
                 )}
