@@ -212,7 +212,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   >([]);
 
   const [yjsBlocksSnapshot, setYjsBlocksSnapshot] = useState<
-    { id: string; type: string; text: string }[]
+    { id: string; type: string; text: string; position: number }[]
   >([]);
 
   const ydocRef = useRef<Y.Doc | null>(null);
@@ -233,7 +233,11 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
       const result: Block[] = [];
 
-      yjsBlocksSnapshot.forEach((item, index) => {
+      const sortedSnapshot = [...yjsBlocksSnapshot].sort(
+        (a, b) => a.position - b.position
+      );
+
+      sortedSnapshot.forEach((item) => {
         const id = item.id;
         if (!id) {
           return;
@@ -242,6 +246,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         const dbBlock = dbById.get(id);
         const type = (item.type as BlockType) || dbBlock?.type || "paragraph";
         const text = item.text;
+        const position = item.position;
 
         let base: Block;
         if (dbBlock) {
@@ -268,7 +273,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
             type,
             content,
             properties: {},
-            position: index,
+            position,
             version: 1,
             createdBy: null,
             createdAt: new Date(),
@@ -361,7 +366,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
           ...base,
           type,
           content: nextContent,
-          position: index,
+          position,
         });
 
         dbById.delete(id);
@@ -463,10 +468,15 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     }
 
     const array = yBlocks.toArray() as Y.Map<unknown>[];
-    const snapshot = array.map((item) => {
+    const snapshot = array.map((item, index) => {
       const id = (item.get("id") as string) || "";
       const type = (item.get("type") as string) || "paragraph";
       const content = item.get("content");
+      const rawPosition = item.get("position");
+      const position =
+        typeof rawPosition === "number" && Number.isFinite(rawPosition)
+          ? (rawPosition as number)
+          : index;
       let text = "";
 
       if (content instanceof Y.Text) {
@@ -479,6 +489,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         id,
         type,
         text,
+        position,
       };
     });
 
