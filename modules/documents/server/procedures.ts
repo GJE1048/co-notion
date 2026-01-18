@@ -111,6 +111,17 @@ const canManageDocument = (record: DocumentAccessRecord | undefined, userId: str
   return false;
 };
 
+const canEditDocumentFromAccess = (record: DocumentAccessRecord | undefined, userId: string) => {
+  if (!record) return false;
+  const { document, workspace, collaborator, workspaceMember } = record;
+  if (!document) return false;
+  if (document.ownerId === userId) return true;
+  if (workspace && (workspace.ownerId === userId)) return true;
+  if (collaborator && collaborator.userId === userId && (collaborator.role === "owner" || collaborator.role === "editor")) return true;
+  if (workspaceMember && workspaceMember.userId === userId && (workspaceMember.role === "admin" || workspaceMember.role === "editor")) return true;
+  return false;
+};
+
 const DOCUMENT_CACHE_TTL_SECONDS = 60;
 const BLOCKS_FIRST_PAGE_TTL_SECONDS = 60;
 
@@ -1489,7 +1500,7 @@ export const documentsRouter = createTRPCRouter({
         });
       }
 
-      if (!canManageDocument(access, ctx.user.id)) {
+      if (!canEditDocumentFromAccess(access, ctx.user.id)) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "无权限保存文档状态",
