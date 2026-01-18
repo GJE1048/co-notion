@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { useRouter } from "next/navigation";
@@ -118,6 +118,37 @@ const getUserColor = (id: string) => {
   return `hsl(${hue}, 70%, 60%)`;
 };
 
+const PERMISSION_DENIED_MESSAGE = "你没有编辑文档的权限";
+
+const CenterToast = ({ children }: { children: ReactNode }) => (
+  <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
+    <div className="pointer-events-auto max-w-lg min-w-[100px] w-full mx-4 rounded-xl bg-slate-900 text-white px-4 py-8 shadow-2xl text-base text-center">
+      {children}
+    </div>
+  </div>
+);
+
+type BlockForInitialText = Omit<Block, "id" | "createdAt" | "updatedAt">;
+
+const getInitialTextFromBlockContent = (blockData: BlockForInitialText) => {
+  if (blockData.type === "code") {
+    type CodeContent = {
+      code?: {
+        content?: string;
+      };
+    };
+    const value = blockData.content as unknown as CodeContent;
+    return value.code?.content ?? "";
+  }
+  type TextContent = {
+    text?: {
+      content?: string;
+    };
+  };
+  const value = blockData.content as unknown as TextContent;
+  return value.text?.content ?? "";
+};
+
 export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProps) => {
   const yBlocksRef = useRef<Y.Array<Y.Map<unknown>> | null>(null);
 
@@ -160,7 +191,14 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   });
 
   const updateDocumentMutation = trpc.documents.updateDocument.useMutation();
-  const saveYjsStateMutation = trpc.documents.saveYjsState.useMutation();
+  const saveYjsStateMutation = trpc.documents.saveYjsState.useMutation({
+    onError: (err) => {
+      const message =
+        err instanceof Error ? err.message : "保存文档内容失败";
+      setError(message);
+      setToastMessage(message);
+    },
+  });
   const saveYjsStateMutationRef = useRef(saveYjsStateMutation);
   const deleteDocumentMutation = trpc.documents.deleteDocument.useMutation({
     onSuccess: () => {
@@ -205,6 +243,10 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       workspaceRoleFromMember === "admin";
     return isDocOwner || workspaceEditor || isDocOwnerFromMember || isDocEditor || isWorkspaceEditorFromMember;
   })();
+  const showPermissionDenied = useCallback(() => {
+    setError(PERMISSION_DENIED_MESSAGE);
+    setToastMessage(PERMISSION_DENIED_MESSAGE);
+  }, []);
   const [onlineUsernames, setOnlineUsernames] = useState<string[]>([]);
   const hasPresence = onlineUsernames.length > 0;
   const [remoteCursors, setRemoteCursors] = useState<
@@ -643,8 +685,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
   const handleSave = useCallback(async () => {
     if (!canEditDocument) {
-      setError("你没有编辑文档的权限");
-      setToastMessage("你没有编辑文档的权限");
+      showPermissionDenied();
       return;
     }
     try {
@@ -663,7 +704,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       setError(message);
       setToastMessage(message);
     }
-  }, [canEditDocument, updateDocumentMutation, initialDocument.id, title]);
+  }, [canEditDocument, updateDocumentMutation, initialDocument.id, title, showPermissionDenied]);
 
   const isSaving = updateDocumentMutation.isPending;
   const [isShareOpen, setIsShareOpen] = useState(false);
@@ -674,8 +715,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     async (blockData: Omit<Block, "id" | "createdAt" | "updatedAt">) => {
       try {
         if (!canEditDocument) {
-          setError("你没有编辑文档的权限");
-          setToastMessage("你没有编辑文档的权限");
+          showPermissionDenied();
           return;
         }
 
@@ -713,25 +753,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         yBlock.set("id", id);
         yBlock.set("type", blockData.type);
         yBlock.set("position", position);
-
-        const initialText = (() => {
-          if (blockData.type === "code") {
-            type CodeContent = {
-              code?: {
-                content?: string;
-              };
-            };
-            const value = blockData.content as unknown as CodeContent;
-            return value.code?.content ?? "";
-          }
-          type TextContent = {
-            text?: {
-              content?: string;
-            };
-          };
-          const value = blockData.content as unknown as TextContent;
-          return value.text?.content ?? "";
-        })();
+        const initialText = getInitialTextFromBlockContent(blockData);
 
         const yText = new Y.Text(initialText);
         yBlock.set("content", yText);
@@ -744,7 +766,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         );
       }
     },
-    [canEditDocument]
+    [canEditDocument, showPermissionDenied]
   );
 
   const handleBlockCreateAfter = useCallback(
@@ -754,8 +776,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     ) => {
       try {
         if (!canEditDocument) {
-          setError("你没有编辑文档的权限");
-          setToastMessage("你没有编辑文档的权限");
+          showPermissionDenied();
           return;
         }
 
@@ -800,25 +821,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         yBlock.set("id", id);
         yBlock.set("type", blockData.type);
         yBlock.set("position", position);
-
-        const initialText = (() => {
-          if (blockData.type === "code") {
-            type CodeContent = {
-              code?: {
-                content?: string;
-              };
-            };
-            const value = blockData.content as unknown as CodeContent;
-            return value.code?.content ?? "";
-          }
-          type TextContent = {
-            text?: {
-              content?: string;
-            };
-          };
-          const value = blockData.content as unknown as TextContent;
-          return value.text?.content ?? "";
-        })();
+        const initialText = getInitialTextFromBlockContent(blockData);
 
         const yText = new Y.Text(initialText);
         yBlock.set("content", yText);
@@ -835,15 +838,14 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         );
       }
     },
-    [canEditDocument]
+    [canEditDocument, showPermissionDenied]
   );
 
   const handleBlockUpdate = useCallback(
     async (blockId: string, updates: Partial<Block>) => {
       try {
         if (!canEditDocument) {
-          setError("你没有编辑文档的权限");
-          setToastMessage("你没有编辑文档的权限");
+          showPermissionDenied();
           return;
         }
 
@@ -946,15 +948,14 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         );
       }
     },
-    [canEditDocument, utils, blocksQueryInput]
+    [canEditDocument, utils, blocksQueryInput, showPermissionDenied]
   );
 
   const handleBlockDelete = useCallback(
     async (blockId: string) => {
       try {
         if (!canEditDocument) {
-          setError("你没有编辑文档的权限");
-          setToastMessage("你没有编辑文档的权限");
+          showPermissionDenied();
           return;
         }
 
@@ -967,7 +968,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         );
       }
     },
-    [canEditDocument, deleteBlockFromYjs]
+    [canEditDocument, deleteBlockFromYjs, showPermissionDenied]
   );
 
   useEffect(() => {
@@ -1771,19 +1772,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         )}
       </div>
 
-      {(error || blocksError) && (
-        <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
-          <p className="text-sm text-red-600 dark:text-red-400">
-            {error || '加载文档内容失败'}
-          </p>
-        </div>
-      )}
-
-      {toastMessage && (
-        <div className="fixed bottom-4 right-4 z-50 rounded-md bg-slate-900 text-white px-4 py-2 shadow-lg text-sm">
-          {toastMessage}
-        </div>
-      )}
+      {toastMessage && <CenterToast>{toastMessage}</CenterToast>}
 
       <div className="flex items-start gap-4">
         <div className={isChatSidebarOpen ? "flex-1" : "flex-1"}>
