@@ -249,11 +249,63 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
             } as unknown;
           }
 
-          return {
-            text: {
-              content: text,
-            },
-          } as unknown;
+          if (type === "list") {
+            const lines = text ? text.split("\n") : [""];
+            return {
+              list: {
+                items: lines,
+              },
+            } as unknown;
+          }
+
+          if (type === "todo") {
+            const lines = text ? text.split("\n") : [""];
+            const items = lines.map((raw) => {
+              const line = raw.trim();
+              if (!line) {
+                return {
+                  text: "",
+                  checked: false,
+                };
+              }
+              const checked =
+                line.startsWith("[x] ") || line.startsWith("[X] ");
+              const contentText = (() => {
+                if (line.startsWith("[x] ") || line.startsWith("[X] ")) {
+                  return line.slice(4);
+                }
+                if (line.startsWith("[ ] ")) {
+                  return line.slice(4);
+                }
+                return line;
+              })();
+              return {
+                text: contentText,
+                checked,
+              };
+            });
+            return {
+              todo: {
+                items,
+              },
+            } as unknown;
+          }
+
+          if (
+            type === "heading_1" ||
+            type === "heading_2" ||
+            type === "heading_3" ||
+            type === "paragraph" ||
+            type === "quote"
+          ) {
+            return {
+              text: {
+                content: text,
+              },
+            } as unknown;
+          }
+
+          return base.content;
         })();
 
         result.push({
@@ -301,6 +353,35 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   useEffect(() => {
     saveYjsStateMutationRef.current = saveYjsStateMutation;
   }, [saveYjsStateMutation]);
+
+  const updateYjsBlocksSnapshot = useCallback(() => {
+    const yBlocks = yBlocksRef.current;
+    if (!yBlocks) {
+      return;
+    }
+
+    const array = yBlocks.toArray() as Y.Map<unknown>[];
+    const snapshot = array.map((item) => {
+      const id = (item.get("id") as string) || "";
+      const type = (item.get("type") as string) || "paragraph";
+      const content = item.get("content");
+      let text = "";
+
+      if (content instanceof Y.Text) {
+        text = content.toString();
+      } else if (typeof content === "string") {
+        text = content;
+      }
+
+      return {
+        id,
+        type,
+        text,
+      };
+    });
+
+    setYjsBlocksSnapshot(snapshot);
+  }, []);
 
   const selectedBlock = useMemo(
     () => (selectedBlockId ? blocks.find((block) => block.id === selectedBlockId) : undefined),
@@ -682,12 +763,36 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
                 code?: {
                   content?: string;
                 };
+                list?: {
+                  items?: string[];
+                };
+                todo?: {
+                  items?: {
+                    text?: string;
+                    checked?: boolean;
+                  }[];
+                };
               };
               if (v.code && typeof v.code.content === "string") {
                 return v.code.content;
               }
               if (v.text && typeof v.text.content === "string") {
                 return v.text.content;
+              }
+              if (v.list && Array.isArray(v.list.items)) {
+                return v.list.items
+                  .map((item) => (typeof item === "string" ? item : ""))
+                  .join("\n");
+              }
+              if (v.todo && Array.isArray(v.todo.items)) {
+                const lines = v.todo.items.map((item) => {
+                  const checked = !!item?.checked;
+                  const prefix = checked ? "[x] " : "[ ] ";
+                  const textValue =
+                    typeof item?.text === "string" ? item.text : "";
+                  return prefix + textValue.replace(/\r?\n/g, " ");
+                });
+                return lines.join("\n");
               }
               return "";
             })();
@@ -765,6 +870,8 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     let lastPersistAt = Date.now();
 
     const handleYDocUpdate = () => {
+      updateYjsBlocksSnapshot();
+
       if (!canEditDocument) {
         return;
       }
@@ -798,46 +905,19 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
     };
 
     ydoc.on("update", handleYDocUpdate);
-
-    const handleUpdate = () => {
-      const array = yBlocks.toArray() as Y.Map<unknown>[];
-      const snapshot = array.map((item) => {
-        const id = (item.get("id") as string) || "";
-        const type = (item.get("type") as string) || "paragraph";
-        const content = item.get("content");
-        let text = "";
-
-        if (content instanceof Y.Text) {
-          text = content.toString();
-        } else if (typeof content === "string") {
-          text = content;
-        }
-
-        return {
-          id,
-          type,
-          text,
-        };
-      });
-
-      setYjsBlocksSnapshot(snapshot);
-    };
-
-    yBlocks.observe(handleUpdate);
-    handleUpdate();
+    updateYjsBlocksSnapshot();
 
     return () => {
       ydoc.off("update", handleYDocUpdate);
       if (saveTimeout !== null) {
         window.clearTimeout(saveTimeout);
       }
-      yBlocks.unobserve(handleUpdate);
       yBlocksRef.current = null;
       ydocRef.current = null;
       provider.destroy();
       ydoc.destroy();
     };
-  }, [initialDocument.id, canEditDocument]);
+  }, [initialDocument.id, canEditDocument, updateYjsBlocksSnapshot]);
 
   useEffect(() => {
     if (typeof window === "undefined") {

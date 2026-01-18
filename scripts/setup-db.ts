@@ -40,7 +40,7 @@ const pool = new Pool({
   ssl: cleanDbUrl.includes("neon.tech") ? { rejectUnauthorized: false } : undefined,
 });
 
-async function syncBlocksFromYjsState() {
+export async function syncBlocksFromYjsState() {
   console.log("\n🔄 开始根据 Yjs 状态重建 blocks 表...");
 
   const client = await pool.connect();
@@ -88,27 +88,15 @@ async function syncBlocksFromYjsState() {
 
       console.log(`Y.Doc 中包含 ${items.length} 个 Block`);
 
-      const existingBlocks = await client.query<{
-        id: string;
-      }>(
-        `SELECT id FROM blocks WHERE document_id = $1`,
+      await client.query(
+        `DELETE FROM blocks WHERE document_id = $1`,
         [documentId]
       );
 
-      const existingIds = new Set(existingBlocks.rows.map((b) => b.id));
-      const yIds = new Set<string>();
-
       for (let index = 0; index < items.length; index += 1) {
         const item = items[index];
-        const id = item.get("id") as string | undefined;
-        if (!id) {
-          continue;
-        }
-
-        yIds.add(id);
         const type = (item.get("type") as string) || "paragraph";
-        const position =
-          (item.get("position") as number | undefined) ?? index;
+        const position = index;
         const content = item.get("content");
 
         let text = "";
@@ -126,6 +114,44 @@ async function syncBlocksFromYjsState() {
               language: "javascript",
             },
           };
+        } else if (type === "list") {
+          const lines = text ? text.split("\n") : [""];
+          blockContent = {
+            list: {
+              items: lines,
+            },
+          };
+        } else if (type === "todo") {
+          const lines = text ? text.split("\n") : [""];
+          const itemsForTodo = lines.map((raw) => {
+            const line = raw.trim();
+            if (!line) {
+              return {
+                text: "",
+                checked: false,
+              };
+            }
+            const checked =
+              line.startsWith("[x] ") || line.startsWith("[X] ");
+            const contentText = (() => {
+              if (line.startsWith("[x] ") || line.startsWith("[X] ")) {
+                return line.slice(4);
+              }
+              if (line.startsWith("[ ] ")) {
+                return line.slice(4);
+              }
+              return line;
+            })();
+            return {
+              text: contentText,
+              checked,
+            };
+          });
+          blockContent = {
+            todo: {
+              items: itemsForTodo,
+            },
+          };
         } else {
           blockContent = {
             text: {
@@ -134,40 +160,12 @@ async function syncBlocksFromYjsState() {
           };
         }
 
-        if (existingIds.has(id)) {
-          await client.query(
-            `
-            UPDATE blocks
-            SET type = $1,
-                content = $2::jsonb,
-                position = $3,
-                updated_at = NOW()
-            WHERE id = $4
-          `,
-            [type, JSON.stringify(blockContent), position, id]
-          );
-        } else {
-          await client.query(
-            `
-            INSERT INTO blocks (id, document_id, parent_id, type, content, properties, position, version, created_by)
-            VALUES ($1, $2, NULL, $3, $4::jsonb, '{}'::jsonb, $5, 1, NULL)
-          `,
-            [id, documentId, type, JSON.stringify(blockContent), position]
-          );
-        }
-      }
-
-      const idsToDelete = Array.from(existingIds).filter(
-        (id) => !yIds.has(id)
-      );
-
-      if (idsToDelete.length > 0) {
         await client.query(
-          `DELETE FROM blocks WHERE document_id = $1 AND id = ANY($2::uuid[])`,
-          [documentId, idsToDelete]
-        );
-        console.log(
-          `已删除在 Y.Doc 中不存在的 ${idsToDelete.length} 个 Block`
+          `
+          INSERT INTO blocks (document_id, parent_id, type, content, properties, position, version, created_by)
+          VALUES ($1, NULL, $2, $3::jsonb, '{}'::jsonb, $4, 1, NULL)
+        `,
+          [documentId, type, JSON.stringify(blockContent), position]
         );
       }
 
@@ -338,4 +336,6 @@ async function setupDatabase() {
   }
 }
 
-setupDatabase();
+if (require.main === module) {
+  setupDatabase();
+}
