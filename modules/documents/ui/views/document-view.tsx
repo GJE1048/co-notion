@@ -3,6 +3,9 @@
 import { trpc } from "@/trpc/client";
 import { redirect, notFound } from "next/navigation";
 import { DocumentEditor } from "../components/document-editor";
+import type { documents } from "@/db/schema";
+
+type Document = typeof documents.$inferSelect;
 
 interface DocumentViewProps {
   documentId: string;
@@ -16,9 +19,10 @@ export const DocumentView = ({ documentId }: DocumentViewProps) => {
   const {
     data: document,
     isLoading: documentLoading,
-    isFetching: documentFetching,
     error: documentError,
   } = trpc.documents.getDocument.useQuery({ id: documentId });
+
+  const baseDocument = (document ?? optimisticDocument) as Document | undefined;
 
   if (documentError) {
     if (documentError.data?.code === "NOT_FOUND") {
@@ -38,7 +42,7 @@ export const DocumentView = ({ documentId }: DocumentViewProps) => {
     );
   }
 
-  if (!document && !optimisticDocument && documentLoading) {
+  if (!baseDocument && documentLoading) {
     return (
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="flex items-center justify-center py-12">
@@ -49,31 +53,10 @@ export const DocumentView = ({ documentId }: DocumentViewProps) => {
     );
   }
 
-  if (document) {
+  if (baseDocument) {
     return (
       <div className="max-w-5xl mx-auto space-y-6">
-        <DocumentEditor document={document} />
-      </div>
-    );
-  }
-
-  if (optimisticDocument) {
-    return (
-      <div className="max-w-5xl mx-auto space-y-6">
-        <div className="pt-8 space-y-2">
-          <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-100">
-            {optimisticDocument.title || "未命名文档"}
-          </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            正在加载协同编辑内容...
-          </p>
-        </div>
-        <div className="flex items-center justify-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-          <span className="ml-2 text-slate-500">
-            {documentFetching ? "同步最新内容..." : "初始化文档内容..."}
-          </span>
-        </div>
+        <DocumentEditor document={baseDocument} />
       </div>
     );
   }
