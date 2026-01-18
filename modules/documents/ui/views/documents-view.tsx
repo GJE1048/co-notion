@@ -21,6 +21,10 @@ export const DocumentsView = () => {
   const [activeDocumentMenuId, setActiveDocumentMenuId] = useState<string | null>(null);
   const [confirmDeleteDocumentId, setConfirmDeleteDocumentId] = useState<string | null>(null);
   const [confirmCopyDocumentId, setConfirmCopyDocumentId] = useState<string | null>(null);
+  const [moveDocumentId, setMoveDocumentId] = useState<string | null>(null);
+  const [moveTargetWorkspaceId, setMoveTargetWorkspaceId] = useState<string>("");
+  const [shareDocumentId, setShareDocumentId] = useState<string | null>(null);
+  const [shareLink, setShareLink] = useState("");
 
   const {
     data: documents,
@@ -419,7 +423,7 @@ export const DocumentsView = () => {
         <div className="space-y-8">
           {workspaceGroups.map((group) => (
             <section key={group.workspaceId ?? "unknown"} className="space-y-3">
-              <div className="flex items-baseline justify-between">
+              <div className="flex items-baseline space-x-4">
                 <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
                   {group.workspaceId === "shared"
                     ? "共享文档"
@@ -463,15 +467,7 @@ export const DocumentsView = () => {
                               <span>
                                 更新时间：{new Date(doc.updatedAt).toLocaleDateString()}
                               </span>
-                              {group.workspaceId === "shared" ? (
-                                <span className="text-slate-400 dark:text-slate-500">
-                                  共享文档
-                                </span>
-                              ) : doc.workspace && (
-                                <span className="text-slate-400 dark:text-slate-500">
-                                  {doc.workspace.name}
-                                </span>
-                              )}
+                              
                             </div>
                           </Link>
                           {(group.workspaceRole === "creator" || group.workspaceRole === "admin" || group.isPersonal) && (
@@ -494,6 +490,28 @@ export const DocumentsView = () => {
                         </div>
                         {activeDocumentMenuId === doc.id && (group.workspaceRole === "creator" || group.workspaceRole === "admin" || group.isPersonal) && (
                           <div className="absolute top-2 right-2 z-20 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-md py-1 min-w-[140px]">
+                            <button
+                              type="button"
+                              className="w-full px-3 py-1.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                              onClick={() => {
+                                setMoveDocumentId(doc.id);
+                                setMoveTargetWorkspaceId(doc.workspace?.id ? String(doc.workspace.id) : "");
+                                setActiveDocumentMenuId(null);
+                              }}
+                            >
+                              移动
+                            </button>
+                            <button
+                              type="button"
+                              className="w-full px-3 py-1.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                              onClick={() => {
+                                setShareDocumentId(doc.id);
+                                setShareLink("");
+                                setActiveDocumentMenuId(null);
+                              }}
+                            >
+                              分享
+                            </button>
                             <button
                               type="button"
                               className="w-full px-3 py-1.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
@@ -684,6 +702,138 @@ export const DocumentsView = () => {
               ) : (
                 "确认复制"
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!moveDocumentId}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMoveDocumentId(null);
+            setMoveTargetWorkspaceId("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>移动文档</DialogTitle>
+            <DialogDescription>
+              选择一个目标工作区，将文档从当前工作区移动过去。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                目标工作区
+              </label>
+              <select
+                className="mt-1 w-full border rounded-md p-2 bg-white dark:bg-slate-900"
+                value={moveTargetWorkspaceId}
+                onChange={(event) => setMoveTargetWorkspaceId(event.target.value)}
+              >
+                <option value="">请选择</option>
+                {nonPersonalWorkspaces.map((ws) => (
+                  <option key={ws.id} value={String(ws.id)}>
+                    {ws.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <DialogFooter className="pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setMoveDocumentId(null);
+                setMoveTargetWorkspaceId("");
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              disabled={!moveDocumentId || !moveTargetWorkspaceId}
+              onClick={async () => {
+                if (!moveDocumentId || !moveTargetWorkspaceId) return;
+                try {
+                  await trpc.documents.updateDocument.mutateAsync({
+                    id: moveDocumentId,
+                    data: { workspaceId: moveTargetWorkspaceId },
+                  } as never);
+                  setMoveDocumentId(null);
+                  setMoveTargetWorkspaceId("");
+                  await utils.documents.getUserDocuments.invalidate();
+                  await utils.workspaces.getUserWorkspaces.invalidate();
+                } catch {
+                }
+              }}
+            >
+              确认移动
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!shareDocumentId}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShareDocumentId(null);
+            setShareLink("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>分享文档</DialogTitle>
+            <DialogDescription>
+              生成一个分享链接，邀请其他用户协同编辑此文档。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                分享链接
+              </label>
+              <Input
+                type="text"
+                readOnly
+                value={shareLink}
+                placeholder="点击下方按钮生成分享链接"
+                className="mt-1"
+              />
+            </div>
+          </div>
+          <DialogFooter className="pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setShareDocumentId(null);
+                setShareLink("");
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              disabled={!shareDocumentId}
+              onClick={() => {
+                if (!shareDocumentId || typeof window === "undefined") return;
+                const url = new URL(window.location.href);
+                url.pathname = "/invite/document";
+                url.searchParams.set("documentId", shareDocumentId);
+                const fullLink = url.toString();
+                setShareLink(fullLink);
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  navigator.clipboard.writeText(fullLink).catch(() => {});
+                }
+              }}
+            >
+              生成并复制链接
             </Button>
           </DialogFooter>
         </DialogContent>

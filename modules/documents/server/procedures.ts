@@ -55,6 +55,51 @@ type DocumentAccessRecord = {
   workspaceMember: typeof workspaceMembers.$inferSelect | null;
 };
 
+type ShareLogEntry = {
+  message: string;
+  type: "share" | "revoke";
+  createdAt: string;
+};
+
+type DocumentMetadata = Record<string, unknown> & {
+  shareLogs?: ShareLogEntry[];
+};
+
+const appendDocumentShareLog = async (documentId: string, entry: ShareLogEntry) => {
+  const [doc] = await db
+    .select({
+      metadata: documents.metadata,
+    })
+    .from(documents)
+    .where(eq(documents.id, documentId));
+
+  if (!doc) {
+    return;
+  }
+
+  const metadata = (doc.metadata ?? {}) as DocumentMetadata;
+  const existingLogs = Array.isArray(metadata.shareLogs)
+    ? metadata.shareLogs
+    : [];
+
+  const nextMetadata: DocumentMetadata = {
+    ...metadata,
+    shareLogs: [...existingLogs, entry],
+  };
+
+  await db
+    .update(documents)
+    .set({
+      metadata: nextMetadata,
+      updatedAt: new Date(),
+    })
+    .where(eq(documents.id, documentId));
+
+  if (redis) {
+    await redis.del(`doc:${documentId}`);
+  }
+};
+
 const canManageDocument = (record: DocumentAccessRecord | undefined, userId: string) => {
   if (!record) return false;
   const { document, workspace, collaborator, workspaceMember } = record;
@@ -1071,8 +1116,6 @@ export const documentsRouter = createTRPCRouter({
         throw new TRPCError({ code: "FORBIDDEN", message: "无权限分享文档" });
       }
 
-      const doc = access.document;
-
       const [target] = await db
         .select()
         .from(users)
@@ -1081,6 +1124,19 @@ export const documentsRouter = createTRPCRouter({
       if (!target) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "目标用户不存在" });
       }
+
+      const doc = access.document;
+
+      const [currentUser] = await db
+        .select({
+          id: users.id,
+          username: users.username,
+        })
+        .from(users)
+        .where(eq(users.id, ctx.user.id));
+
+      const actorName = currentUser?.username || "未知用户";
+      const documentTitle = doc.title || "未命名文档";
 
       if (input.copyToPersonal) {
         const personalWs = await ensurePersonalWorkspace(target.id);
@@ -1118,6 +1174,12 @@ export const documentsRouter = createTRPCRouter({
           }
         }
 
+        await appendDocumentShareLog(input.documentId, {
+          message: `${actorName} 将文档《${documentTitle}》分享给 ${target.username}（复制到对方个人工作区）`,
+          type: "share",
+          createdAt: new Date().toISOString(),
+        });
+
         return { newDocumentId: newDoc.id };
       } else {
         const [existing] = await db
@@ -1130,6 +1192,13 @@ export const documentsRouter = createTRPCRouter({
             .update(documentCollaborators)
             .set({ role: "editor" })
             .where(eq(documentCollaborators.id, existing.id));
+
+          await appendDocumentShareLog(input.documentId, {
+            message: `${actorName} 将文档《${documentTitle}》分享给 ${target.username}`,
+            type: "share",
+            createdAt: new Date().toISOString(),
+          });
+
           return { sharedAsCollaborator: true };
         }
 
@@ -1141,12 +1210,18 @@ export const documentsRouter = createTRPCRouter({
             role: "editor",
           });
 
+        await appendDocumentShareLog(input.documentId, {
+          message: `${actorName} 将文档《${documentTitle}》分享给 ${target.username}`,
+          type: "share",
+          createdAt: new Date().toISOString(),
+        });
+
         return { sharedAsCollaborator: true };
       }
     }),
   getSharedDocumentsByMe: protectedProcedure
     .query(async ({ ctx }) => {
-      const sharedDocs = await db
+      const sharedDocsRaw = await db
         .select({
           id: documents.id,
           title: documents.title,
@@ -1157,6 +1232,7 @@ export const documentsRouter = createTRPCRouter({
             id: workspaces.id,
             name: workspaces.name,
           },
+          metadata: documents.metadata,
         })
         .from(documents)
         .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
@@ -1164,11 +1240,11 @@ export const documentsRouter = createTRPCRouter({
         .where(eq(documents.ownerId, ctx.user.id))
         .orderBy(desc(documents.updatedAt));
 
-      if (sharedDocs.length === 0) {
+      if (sharedDocsRaw.length === 0) {
         return [];
       }
 
-      const documentIds = sharedDocs.map((d) => d.id);
+      const documentIds = sharedDocsRaw.map((d) => d.id);
 
       const collaborators = await db
         .select({
@@ -1186,20 +1262,82 @@ export const documentsRouter = createTRPCRouter({
           eq(users.id, users.id),
         ));
 
-      const grouped = sharedDocs.map((doc) => ({
-        ...doc,
-        collaborators: collaborators
-          .filter((c) => c.documentId === doc.id && c.userId !== ctx.user.id)
-          .map((c) => ({
-            userId: c.userId,
-            username: c.username,
-            imageUrl: c.imageUrl,
-            role: c.role,
-            createdAt: c.createdAt,
-          })),
-      }));
+      const grouped = sharedDocsRaw.map((doc) => {
+        const metadata = (doc.metadata ?? {}) as DocumentMetadata;
+        const shareLogs = Array.isArray(metadata.shareLogs) ? metadata.shareLogs : [];
+        return {
+          id: doc.id,
+          title: doc.title,
+          workspaceId: doc.workspaceId,
+          createdAt: doc.createdAt,
+          updatedAt: doc.updatedAt,
+          workspace: doc.workspace,
+          collaborators: collaborators
+            .filter((c) => c.documentId === doc.id && c.userId !== ctx.user.id)
+            .map((c) => ({
+              userId: c.userId,
+              username: c.username,
+              imageUrl: c.imageUrl,
+              role: c.role,
+              createdAt: c.createdAt,
+            })),
+          shareLogs,
+        };
+      });
 
       return grouped;
+    }),
+  getDocumentsSharedWithMe: protectedProcedure
+    .query(async ({ ctx }) => {
+      const docs = await db
+        .select({
+          id: documents.id,
+          title: documents.title,
+          workspaceId: documents.workspaceId,
+          createdAt: documents.createdAt,
+          updatedAt: documents.updatedAt,
+          workspace: {
+            id: workspaces.id,
+            name: workspaces.name,
+          },
+          ownerId: documents.ownerId,
+          ownerUsername: users.username,
+          ownerImageUrl: users.imageUrl,
+          collaboratorRole: documentCollaborators.role,
+          sharedAt: documentCollaborators.createdAt,
+          metadata: documents.metadata,
+        })
+        .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .innerJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .innerJoin(users, eq(documents.ownerId, users.id))
+        .where(eq(documentCollaborators.userId, ctx.user.id))
+        .orderBy(desc(documents.updatedAt));
+
+      if (docs.length === 0) {
+        return [];
+      }
+
+      return docs.map((doc) => {
+        const metadata = (doc.metadata ?? {}) as DocumentMetadata;
+        const shareLogs = Array.isArray(metadata.shareLogs) ? metadata.shareLogs : [];
+        return {
+          id: doc.id,
+          title: doc.title,
+          workspaceId: doc.workspaceId,
+          createdAt: doc.createdAt,
+          updatedAt: doc.updatedAt,
+          workspace: doc.workspace,
+          owner: {
+            id: doc.ownerId,
+            username: doc.ownerUsername,
+            imageUrl: doc.ownerImageUrl,
+          },
+          collaboratorRole: doc.collaboratorRole,
+          sharedAt: doc.sharedAt,
+          shareLogs,
+        };
+      });
     }),
   updateCollaboratorRole: protectedProcedure
     .input(z.object({
@@ -1282,12 +1420,38 @@ export const documentsRouter = createTRPCRouter({
         throw new TRPCError({ code: "FORBIDDEN", message: "无权限撤回文档分享" });
       }
 
+      const [targetUser] = await db
+        .select({
+          id: users.id,
+          username: users.username,
+        })
+        .from(users)
+        .where(eq(users.id, input.userId));
+
+      const [currentUser] = await db
+        .select({
+          id: users.id,
+          username: users.username,
+        })
+        .from(users)
+        .where(eq(users.id, ctx.user.id));
+
+      const actorName = currentUser?.username || "未知用户";
+      const targetName = targetUser?.username || "未知用户";
+      const documentTitle = access.document.title || "未命名文档";
+
       await db
         .delete(documentCollaborators)
         .where(and(
           eq(documentCollaborators.documentId, input.documentId),
           eq(documentCollaborators.userId, input.userId),
         ));
+
+      await appendDocumentShareLog(input.documentId, {
+        message: `${actorName} 撤回了对 ${targetName} 的文档《${documentTitle}》分享`,
+        type: "revoke",
+        createdAt: new Date().toISOString(),
+      });
 
       return { success: true };
     }),
