@@ -137,6 +137,7 @@ export const documentsRouter = createTRPCRouter({
             isArchived: boolean;
             permissions: unknown;
             metadata: unknown;
+            yjsState: string | null;
             createdAt: string | Date;
             updatedAt: string | Date;
             workspace: {

@@ -9,10 +9,15 @@ interface DocumentViewProps {
 }
 
 export const DocumentView = ({ documentId }: DocumentViewProps) => {
+  const utils = trpc.useUtils();
+  const cachedDocuments = utils.documents.getUserDocuments.getData();
+  const optimisticDocument = cachedDocuments?.find((doc) => doc.id === documentId);
+
   const {
     data: document,
     isLoading: documentLoading,
-    error: documentError
+    isFetching: documentFetching,
+    error: documentError,
   } = trpc.documents.getDocument.useQuery({ id: documentId });
 
   if (documentError) {
@@ -33,12 +38,41 @@ export const DocumentView = ({ documentId }: DocumentViewProps) => {
     );
   }
 
-  if (documentLoading || !document) {
+  if (!document && !optimisticDocument && documentLoading) {
     return (
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="flex items-center justify-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
           <span className="ml-2 text-slate-500">加载文档中...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (document) {
+    return (
+      <div className="max-w-5xl mx-auto space-y-6">
+        <DocumentEditor document={document} />
+      </div>
+    );
+  }
+
+  if (optimisticDocument) {
+    return (
+      <div className="max-w-5xl mx-auto space-y-6">
+        <div className="pt-8 space-y-2">
+          <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-100">
+            {optimisticDocument.title || "未命名文档"}
+          </h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            正在加载协同编辑内容...
+          </p>
+        </div>
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+          <span className="ml-2 text-slate-500">
+            {documentFetching ? "同步最新内容..." : "初始化文档内容..."}
+          </span>
         </div>
       </div>
     );
@@ -46,7 +80,10 @@ export const DocumentView = ({ documentId }: DocumentViewProps) => {
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <DocumentEditor document={document} />
+      <div className="flex items-center justify-center py-12">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+        <span className="ml-2 text-slate-500">加载文档中...</span>
+      </div>
     </div>
   );
 };

@@ -10,27 +10,88 @@ import { Loader2, UserX } from "lucide-react";
 type CollaboratorRole = "owner" | "editor" | "viewer";
 
 export const SharedDocumentsView = () => {
-  const { data, isLoading, error } = trpc.documents.getSharedDocumentsByMe.useQuery();
+  const { data, isLoading, error } = trpc.documents.getSharedDocumentsByMe.useQuery(undefined, {
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
   const utils = trpc.useUtils();
   const [updatingKey, setUpdatingKey] = useState<string | null>(null);
 
   const updateRoleMutation = trpc.documents.updateCollaboratorRole.useMutation({
-    onSuccess: async () => {
-      setUpdatingKey(null);
-      await utils.documents.getSharedDocumentsByMe.invalidate();
+    onMutate: async (input) => {
+      setUpdatingKey(`${input.documentId}:${input.userId}:role`);
+
+      await utils.documents.getSharedDocumentsByMe.cancel();
+
+      const previous = utils.documents.getSharedDocumentsByMe.getData();
+
+      utils.documents.getSharedDocumentsByMe.setData(undefined, (current) => {
+        if (!current) return current;
+        return current.map((doc) => {
+          if (doc.id !== input.documentId) return doc;
+          return {
+            ...doc,
+            collaborators: doc.collaborators.map((collab) =>
+              collab.userId === input.userId
+                ? { ...collab, role: input.role }
+                : collab
+            ),
+          };
+        });
+      });
+
+      return { previous };
     },
-    onError: () => {
+    onError: (_error, _input, context) => {
+      if (context?.previous) {
+        utils.documents.getSharedDocumentsByMe.setData(undefined, context.previous);
+      }
       setUpdatingKey(null);
+      alert("更新协作者权限失败，请稍后重试。");
+    },
+    onSuccess: () => {
+      setUpdatingKey(null);
+    },
+    onSettled: async () => {
+      await utils.documents.getSharedDocumentsByMe.invalidate();
     },
   });
 
   const removeMutation = trpc.documents.removeCollaborator.useMutation({
-    onSuccess: async () => {
-      setUpdatingKey(null);
-      await utils.documents.getSharedDocumentsByMe.invalidate();
+    onMutate: async (input) => {
+      setUpdatingKey(`${input.documentId}:${input.userId}:remove`);
+
+      await utils.documents.getSharedDocumentsByMe.cancel();
+
+      const previous = utils.documents.getSharedDocumentsByMe.getData();
+
+      utils.documents.getSharedDocumentsByMe.setData(undefined, (current) => {
+        if (!current) return current;
+        return current.map((doc) => {
+          if (doc.id !== input.documentId) return doc;
+          return {
+            ...doc,
+            collaborators: doc.collaborators.filter(
+              (collab) => collab.userId !== input.userId
+            ),
+          };
+        });
+      });
+
+      return { previous };
     },
-    onError: () => {
+    onError: (_error, _input, context) => {
+      if (context?.previous) {
+        utils.documents.getSharedDocumentsByMe.setData(undefined, context.previous);
+      }
       setUpdatingKey(null);
+      alert("移除协作者失败，请稍后重试。");
+    },
+    onSuccess: () => {
+      setUpdatingKey(null);
+    },
+    onSettled: async () => {
+      await utils.documents.getSharedDocumentsByMe.invalidate();
     },
   });
 

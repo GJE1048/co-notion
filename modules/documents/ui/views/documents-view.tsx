@@ -25,10 +25,17 @@ export const DocumentsView = () => {
   const {
     data: documents,
     isLoading,
+    isFetching,
     error
-  } = trpc.documents.getUserDocuments.useQuery();
+  } = trpc.documents.getUserDocuments.useQuery(undefined, {
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
 
-  const { data: workspaces } = trpc.workspaces.getUserWorkspaces.useQuery();
+  const { data: workspaces } = trpc.workspaces.getUserWorkspaces.useQuery(undefined, {
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
   const utils = trpc.useUtils();
 
   const createDocumentMutation = trpc.documents.createDocument.useMutation({
@@ -39,7 +46,25 @@ export const DocumentsView = () => {
   });
 
   const deleteDocumentMutation = trpc.documents.deleteDocument.useMutation({
-    onSuccess: async () => {
+    onMutate: async (input) => {
+      await utils.documents.getUserDocuments.cancel();
+
+      const previousDocuments = utils.documents.getUserDocuments.getData();
+
+      utils.documents.getUserDocuments.setData(undefined, (current) => {
+        if (!current) return current;
+        return current.filter((doc) => doc.id !== input.id);
+      });
+
+      return { previousDocuments };
+    },
+    onError: (_error, _input, context) => {
+      if (context?.previousDocuments) {
+        utils.documents.getUserDocuments.setData(undefined, context.previousDocuments);
+      }
+      alert("删除文档失败，请稍后重试。");
+    },
+    onSettled: async () => {
       await utils.documents.getUserDocuments.invalidate();
     },
   });
@@ -51,11 +76,49 @@ export const DocumentsView = () => {
   });
 
   const createWorkspaceMutation = trpc.workspaces.createWorkspace.useMutation({
-    onSuccess: () => {
+    onMutate: async (input) => {
       setIsCreateWorkspaceDialogOpen(false);
       setWorkspaceName("");
-      // 重新获取文档列表以显示新工作区
-      window.location.reload();
+
+      await utils.workspaces.getUserWorkspaces.cancel();
+
+      const previousWorkspaces = utils.workspaces.getUserWorkspaces.getData() || [];
+
+      const optimisticWorkspace: {
+        id: string;
+        name: string;
+        isPersonal: boolean;
+        permissions: unknown;
+        createdAt: Date;
+        updatedAt: Date;
+        userRole: "creator";
+      } = {
+        id: `optimistic-${Date.now()}`,
+        name: input.name,
+        isPersonal: input.isPersonal ?? true,
+        permissions: {},
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        userRole: "creator",
+      };
+
+      const current = utils.workspaces.getUserWorkspaces.getData();
+      if (!current) {
+        utils.workspaces.getUserWorkspaces.setData(undefined, [optimisticWorkspace]);
+      } else {
+        utils.workspaces.getUserWorkspaces.setData(undefined, [...current, optimisticWorkspace]);
+      }
+
+      return { previousWorkspaces: previousWorkspaces.length ? previousWorkspaces : undefined };
+    },
+    onError: (_error, _input, context) => {
+      if (context?.previousWorkspaces) {
+        utils.workspaces.getUserWorkspaces.setData(undefined, context.previousWorkspaces);
+      }
+      alert("创建工作区失败，请稍后重试。");
+    },
+    onSettled: async () => {
+      await utils.workspaces.getUserWorkspaces.invalidate();
     },
   });
 
