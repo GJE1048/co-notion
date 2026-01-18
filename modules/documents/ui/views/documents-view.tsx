@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Loader2, FileText, Plus, FolderPlus, MoreHorizontal } from "lucide-react";
+import { Loader2, FileText, Plus, FolderPlus, MoreHorizontal, ChevronsDown } from "lucide-react";
 
 export const DocumentsView = () => {
   const [isCreateWorkspaceDialogOpen, setIsCreateWorkspaceDialogOpen] = useState(false);
@@ -25,6 +25,7 @@ export const DocumentsView = () => {
   const [moveTargetWorkspaceId, setMoveTargetWorkspaceId] = useState<string>("");
   const [shareDocumentId, setShareDocumentId] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState("");
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   const {
     data: documents,
@@ -421,26 +422,54 @@ export const DocumentsView = () => {
         </Card>
       ) : (
         <div className="space-y-8">
-          {workspaceGroups.map((group) => (
-            <section key={group.workspaceId ?? "unknown"} className="space-y-3">
-              <div className="flex items-baseline space-x-4">
-                <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-                  {group.workspaceId === "shared"
-                    ? "共享文档"
-                    : group.isPersonal
-                    ? "我的文档"
-                    : group.workspaceName}
-                </h2>
-                {group.workspaceId !== "shared" && !group.isPersonal && group.workspaceRole && (
-                  <span className="text-xs text-slate-500 dark:text-slate-400">
-                    {group.workspaceRole === "creator"
-                      ? "创建者"
-                      : group.workspaceRole === "admin"
-                      ? "管理员"
-                      : "查看者"}
-                  </span>
-                )}
-              </div>
+          {workspaceGroups.map((group) => {
+            const groupKey = group.workspaceId ?? "personal";
+            const isCollapsible = !group.isPersonal;
+            const isCollapsed = isCollapsible ? collapsedGroups[groupKey] ?? true : false;
+            const documentsToRender = isCollapsed ? group.documents.slice(0, 3) : group.documents;
+
+            return (
+              <section key={groupKey} className="space-y-3">
+                <div className="flex items-baseline space-x-4">
+                  <div className="flex items-center gap-2">
+                    {isCollapsible && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCollapsedGroups((prev) => ({
+                            ...prev,
+                            [groupKey]: !isCollapsed,
+                          }))
+                        }
+                        className="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-transform"
+                        aria-label={isCollapsed ? "展开工作区文档" : "收起工作区文档"}
+                      >
+                        <ChevronsDown
+                          strokeWidth={2.5}
+                          className={`size-5 transform transition-transform ${
+                            isCollapsed ? "-rotate-90" : "rotate-0"
+                          }`}
+                        />
+                      </button>
+                    )}
+                    <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
+                      {group.workspaceId === "shared"
+                        ? "共享文档"
+                        : group.isPersonal
+                        ? "我的文档"
+                        : group.workspaceName}
+                    </h2>
+                  </div>
+                  {group.workspaceId !== "shared" && !group.isPersonal && group.workspaceRole && (
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {group.workspaceRole === "creator"
+                        ? "创建者"
+                        : group.workspaceRole === "admin"
+                        ? "管理员"
+                        : "查看者"}
+                    </span>
+                  )}
+                </div>
               {group.documents.length === 0 ? (
                 <Card className="border-dashed border-slate-200 dark:border-slate-700 bg-white/60 dark:bg-slate-900/40">
                   <CardContent className="p-6 text-sm text-slate-500 dark:text-slate-400">
@@ -449,7 +478,7 @@ export const DocumentsView = () => {
                 </Card>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {group.documents.map((doc) => (
+                  {documentsToRender.map((doc) => (
                     <Card
                       key={doc.id}
                       className="group relative h-full border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60 hover:border-slate-300 dark:hover:border-slate-700 hover:shadow-sm transition-all"
@@ -542,7 +571,8 @@ export const DocumentsView = () => {
                 </div>
               )}
             </section>
-          ))}
+            );
+          })}
         </div>
       )}
 
