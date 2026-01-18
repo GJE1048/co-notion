@@ -74,9 +74,47 @@ interface ChatRobotResponse {
   metadata?: ChatMessageMetadata;
 }
 
+type AwarenessUserState = {
+  id?: string;
+  name?: string;
+  color?: string;
+};
+
+type AwarenessCursorState = {
+  blockId?: string;
+};
+
+type AwarenessState = {
+  user?: AwarenessUserState;
+  cursor?: AwarenessCursorState;
+};
+
+type AwarenessLike = {
+  getStates: () => Map<number, AwarenessState>;
+  getLocalState: () => AwarenessState | null | undefined;
+  setLocalState: (state: AwarenessState) => void;
+  on: (eventName: "change", handler: () => void) => void;
+  off: (eventName: "change", handler: () => void) => void;
+};
+
+type CurrentUserPresence = {
+  id: string;
+  username: string;
+} | null;
+
 interface DocumentEditorProps {
   document: Document;
 }
+
+const getUserColor = (id: string) => {
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) {
+    hash = (hash << 5) - hash + id.charCodeAt(i);
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 70%, 60%)`;
+};
 
 export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProps) => {
   const yBlocksRef = useRef<Y.Array<Y.Map<unknown>> | null>(null);
@@ -161,6 +199,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   })();
   const [onlineUsernames, setOnlineUsernames] = useState<string[]>([]);
   const hasPresence = onlineUsernames.length > 0;
+  const [remoteCursors, setRemoteCursors] = useState<{ blockId: string; username: string; color: string }[]>([]);
 
   const [yjsBlocksSnapshot, setYjsBlocksSnapshot] = useState<
     { id: string; type: string; text: string }[]
@@ -349,10 +388,59 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const currentVersionRef = useRef(0);
   const hasInitializedVersionRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const currentUserRef = useRef<CurrentUserPresence>(null);
+  const awarenessRef = useRef<AwarenessLike | null>(null);
 
   useEffect(() => {
     saveYjsStateMutationRef.current = saveYjsStateMutation;
   }, [saveYjsStateMutation]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      currentUserRef.current = null;
+      const awareness = awarenessRef.current;
+      if (awareness) {
+        const prevState = awareness.getLocalState() || {};
+        const nextState: AwarenessState = {
+          ...(prevState as AwarenessState),
+          user: undefined,
+        };
+        awareness.setLocalState(nextState);
+      }
+      return;
+    }
+    currentUserRef.current = {
+      id: currentUser.id,
+      username: currentUser.username,
+    };
+    const awareness = awarenessRef.current;
+    if (awareness) {
+      const prevState = awareness.getLocalState() || {};
+      const color = getUserColor(currentUser.id);
+      const nextState: AwarenessState = {
+        ...(prevState as AwarenessState),
+        user: {
+          id: currentUser.id,
+          name: currentUser.username,
+          color,
+        },
+      };
+      awareness.setLocalState(nextState);
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    const awareness = awarenessRef.current;
+    if (!awareness) {
+      return;
+    }
+    const prevState = awareness.getLocalState() || {};
+    const nextState: AwarenessState = {
+      ...(prevState as AwarenessState),
+      cursor: selectedBlockId ? { blockId: selectedBlockId } : undefined,
+    };
+    awareness.setLocalState(nextState);
+  }, [selectedBlockId]);
 
   const updateYjsBlocksSnapshot = useCallback(() => {
     const yBlocks = yBlocksRef.current;
@@ -861,9 +949,26 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
 
     const provider = new WebsocketProvider(wsUrl, initialDocument.id, ydoc);
     const yBlocks = ydoc.getArray<Y.Map<unknown>>("blocks");
+    const awareness = provider.awareness as unknown as AwarenessLike;
 
     ydocRef.current = ydoc;
     yBlocksRef.current = yBlocks;
+    awarenessRef.current = awareness;
+
+    const localUser = currentUserRef.current;
+    if (localUser && localUser.id && localUser.username) {
+      const prevState = awareness.getLocalState() || {};
+      const color = getUserColor(localUser.id);
+      const nextState: AwarenessState = {
+        ...(prevState as AwarenessState),
+        user: {
+          id: localUser.id,
+          name: localUser.username,
+          color,
+        },
+      };
+      awareness.setLocalState(nextState);
+    }
 
     let saveTimeout: number | null = null;
     let updatesSinceLastPersist = 0;
@@ -904,16 +1009,64 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
       }, delay);
     };
 
+    const handleAwarenessChange = () => {
+      const states = Array.from(awareness.getStates().values());
+      const usernames = new Set<string>();
+      const cursors: { blockId: string; username: string; color: string }[] = [];
+      const localUser = currentUserRef.current;
+      const localUserId = localUser?.id;
+      states.forEach((rawState) => {
+        if (!rawState || typeof rawState !== "object") {
+          return;
+        }
+        const state = rawState as AwarenessState;
+        const user = state.user;
+        const cursor = state.cursor;
+        if (user && typeof user.name === "string") {
+          usernames.add(user.name);
+        }
+        if (
+          cursor &&
+          typeof cursor.blockId === "string" &&
+          (!localUserId || user?.id !== localUserId)
+        ) {
+          const baseId =
+            (user && typeof user.id === "string" && user.id) ||
+            (user && typeof user.name === "string" && user.name) ||
+            cursor.blockId;
+          const color =
+            (user && typeof user.color === "string" && user.color) ||
+            getUserColor(baseId);
+          const username =
+            (user && typeof user.name === "string" && user.name) ||
+            "协作者";
+          cursors.push({
+            blockId: cursor.blockId,
+            username,
+            color,
+          });
+        }
+      });
+      setOnlineUsernames(Array.from(usernames));
+      setRemoteCursors(cursors);
+    };
+
     ydoc.on("update", handleYDocUpdate);
+    awareness.on("change", handleAwarenessChange);
     updateYjsBlocksSnapshot();
+    handleAwarenessChange();
 
     return () => {
       ydoc.off("update", handleYDocUpdate);
+      awareness.off("change", handleAwarenessChange);
       if (saveTimeout !== null) {
         window.clearTimeout(saveTimeout);
       }
       yBlocksRef.current = null;
       ydocRef.current = null;
+      awarenessRef.current = null;
+      setOnlineUsernames([]);
+      setRemoteCursors([]);
       provider.destroy();
       ydoc.destroy();
     };
@@ -964,10 +1117,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
           onlineUsernames?: string[];
           latestVersion?: number;
         };
-
-        if (msg.type === "presence" && msg.documentId === initialDocument.id && Array.isArray(msg.onlineUsernames)) {
-          setOnlineUsernames(msg.onlineUsernames);
-        }
 
         if (msg.type === "document_operations_updated" && msg.documentId === initialDocument.id) {
           void fetchOperations();
@@ -1609,6 +1758,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
                     onBlockDelete={handleBlockDelete}
                     onBlockCreateAfter={handleBlockCreateAfter}
                     onBlockFocus={setSelectedBlockId}
+                    remoteCursors={remoteCursors}
                     readOnly={!canEditDocument}
                   />
                 )}

@@ -10,6 +10,12 @@ import type { blocks } from "@/db/schema";
 
 type Block = typeof blocks.$inferSelect;
 
+type RemoteCursor = {
+  blockId: string;
+  username: string;
+  color: string;
+};
+
 interface BlockEditorProps {
   blocks: Block[];
   onBlockCreate: (block: Omit<Block, "id" | "createdAt" | "updatedAt">) => void;
@@ -20,6 +26,7 @@ interface BlockEditorProps {
     block: Omit<Block, "id" | "createdAt" | "updatedAt">
   ) => void;
   onBlockFocus?: (blockId: string) => void;
+  remoteCursors?: RemoteCursor[];
   readOnly?: boolean;
 }
 
@@ -29,6 +36,7 @@ interface BlockComponentProps {
   onDelete: () => void;
   onCreateAfter?: (type: string) => void;
   onFocus?: () => void;
+  remoteCursors?: RemoteCursor[];
   readOnly?: boolean;
 }
 
@@ -39,6 +47,7 @@ const BlockComponent = ({
   onDelete,
   onCreateAfter,
   onFocus,
+  remoteCursors,
   readOnly,
 }: BlockComponentProps) => {
   const [isEditing, setIsEditing] = useState(false);
@@ -316,6 +325,17 @@ const BlockComponent = ({
 
   return (
     <div className="group relative py-2 hover:bg-slate-50/50 dark:hover:bg-slate-800/30 rounded-lg transition-colors">
+      {remoteCursors && remoteCursors.length > 0 && (
+        <div className="absolute -left-2 top-2 flex -space-x-1">
+          {remoteCursors.slice(0, 3).map((cursor) => (
+            <div
+              key={`${block.id}-${cursor.username}`}
+              className="size-3 rounded-full border border-white shadow-sm"
+              style={{ backgroundColor: cursor.color }}
+            />
+          ))}
+        </div>
+      )}
       {/* Block 工具栏 */}
       {!readOnly && (
         <div className="absolute -left-12 top-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
@@ -430,6 +450,7 @@ export const BlockEditor = ({
   onBlockDelete,
   onBlockCreateAfter,
   onBlockFocus,
+  remoteCursors = [],
   readOnly = false
 }: BlockEditorProps) => {
   const sortedBlocks = [...blocks].sort((a, b) => a.position - b.position);
@@ -473,6 +494,7 @@ export const BlockEditor = ({
           onUpdate={(updates) => onBlockUpdate(block.id, updates)}
           onDelete={() => onBlockDelete(block.id)}
           onCreateAfter={(type) => handleCreateAfter(block.id, type)}
+          remoteCursors={remoteCursors.filter((cursor) => cursor.blockId === block.id)}
           onFocus={() => onBlockFocus?.(block.id)}
           readOnly={readOnly}
         />
