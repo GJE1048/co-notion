@@ -168,6 +168,18 @@ export const documentTags = pgTable("document_tags", {
     uniqueDocumentTag: uniqueIndex("idx_document_tags_unique").on(table.documentId, table.tagId),
 }));
 
+export const wordpressSites = pgTable("wordpress_sites", {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ownerId: uuid("owner_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    siteUrl: text("site_url").notNull(),
+    displayName: text("display_name").notNull(),
+    authType: text("auth_type").notNull(),
+    username: text("username"),
+    credential: jsonb("credential").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 // 关系定义
 export const usersRelations = relations(users, ({ many }) => ({
     documents: many(documents),
@@ -234,6 +246,10 @@ export const documentCollaboratorsRelations = relations(documentCollaborators, (
     user: one(users, { fields: [documentCollaborators.userId], references: [users.id] }),
 }));
 
+export const wordpressSitesRelations = relations(wordpressSites, ({ one }) => ({
+    owner: one(users, { fields: [wordpressSites.ownerId], references: [users.id] }),
+}));
+
 // Schema definitions
 export const insertUserSchema = createInsertSchema(users)
 export const selectUserSchema = createSelectSchema(users)
@@ -274,3 +290,7 @@ export const updateTagSchema = createUpdateSchema(tags)
 export const insertDocumentTagSchema = createInsertSchema(documentTags)
 export const selectDocumentTagSchema = createSelectSchema(documentTags)
 export const updateDocumentTagSchema = createUpdateSchema(documentTags)
+
+export const insertWordpressSiteSchema = createInsertSchema(wordpressSites)
+export const selectWordpressSiteSchema = createSelectSchema(wordpressSites)
+export const updateWordpressSiteSchema = createUpdateSchema(wordpressSites)
