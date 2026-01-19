@@ -290,7 +290,7 @@ export const DocumentsView = () => {
         <div className="flex items-center gap-3">
           <Dialog open={isCreateWorkspaceDialogOpen} onOpenChange={setIsCreateWorkspaceDialogOpen}>
             <DialogTrigger asChild>
-              <Button variant="outline" className="flex items-center gap-2">
+              <Button variant="outline" className="flex items-center gap-2" suppressHydrationWarning>
                 <FolderPlus className="size-4" />
                 新建工作区
               </Button>
@@ -356,7 +356,7 @@ export const DocumentsView = () => {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="flex items-center gap-2">
+              <Button variant="outline" className="flex items-center gap-2" suppressHydrationWarning>
                 更多
                 <MoreHorizontal className="size-4" />
               </Button>

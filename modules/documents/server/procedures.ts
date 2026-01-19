@@ -1906,11 +1906,17 @@ export const documentsRouter = createTRPCRouter({
         applicationPassword?: string;
         encryptedPassword?: string;
         accessToken?: string;
+        blogId?: string | number;
       };
 
       let headers: Record<string, string>;
+      let apiBaseUrl = `${siteUrl}/wp-json/wp/v2`;
+
       if (credential.authType === "oauth" && credential.accessToken) {
         headers = { Authorization: `Bearer ${credential.accessToken}` };
+        if (credential.blogId) {
+          apiBaseUrl = `https://public-api.wordpress.com/wp/v2/sites/${credential.blogId}`;
+        }
       } else if (credential.username && (credential.applicationPassword || credential.encryptedPassword)) {
         const password = credential.applicationPassword || decrypt(credential.encryptedPassword!);
         const authString = `${credential.username}:${password}`;
@@ -1922,8 +1928,8 @@ export const documentsRouter = createTRPCRouter({
 
       try {
         const [categoriesRes, tagsRes] = await Promise.all([
-          fetch(`${siteUrl}/wp-json/wp/v2/categories?per_page=100`, { headers }),
-          fetch(`${siteUrl}/wp-json/wp/v2/tags?per_page=100`, { headers }),
+          fetch(`${apiBaseUrl}/categories?per_page=100`, { headers }),
+          fetch(`${apiBaseUrl}/tags?per_page=100`, { headers }),
         ]);
 
         const categories = categoriesRes.ok ? await categoriesRes.json() as { id: number; name: string }[] : [];
@@ -1952,6 +1958,7 @@ export const documentsRouter = createTRPCRouter({
             slug: z.string().optional(),
             categories: z.array(z.string()).optional(),
             tags: z.array(z.string()).optional(),
+            title: z.string().optional(),
           })
           .optional(),
       })
@@ -2010,6 +2017,7 @@ export const documentsRouter = createTRPCRouter({
         applicationPassword?: string;
         encryptedPassword?: string;
         accessToken?: string;
+        blogId?: string | number;
       };
 
       if (credential.authType !== "application_password" && credential.authType !== "oauth") {
@@ -2019,9 +2027,15 @@ export const documentsRouter = createTRPCRouter({
         });
       }
 
+      const siteUrl = normalizeSiteUrl(site.siteUrl);
       let authHeader = "";
+      let apiBaseUrl = `${siteUrl}/wp-json/wp/v2`;
+
       if (credential.authType === "oauth" && credential.accessToken) {
          authHeader = `Bearer ${credential.accessToken}`;
+         if (credential.blogId) {
+            apiBaseUrl = `https://public-api.wordpress.com/wp/v2/sites/${credential.blogId}`;
+         }
       } else if (credential.username && (credential.applicationPassword || credential.encryptedPassword)) {
          const password = credential.applicationPassword || decrypt(credential.encryptedPassword!);
          const authString = `${credential.username}:${password}`;
@@ -2037,7 +2051,6 @@ export const documentsRouter = createTRPCRouter({
       const exported = await exportDocumentToHtml(input.documentId, async (imageUrl) => {
         return uploadMediaToWordpress(site, imageUrl);
       });
-      const siteUrl = normalizeSiteUrl(site.siteUrl);
 
       const options = input.options ?? {};
       const status = options.status ?? "draft";
@@ -2047,7 +2060,7 @@ export const documentsRouter = createTRPCRouter({
       const existingPost = wordpressMeta?.[site.id];
 
       const body: Record<string, unknown> = {
-        title: exported.title,
+        title: options.title ?? exported.title,
         content: exported.html,
         status,
       };
@@ -2066,8 +2079,8 @@ export const documentsRouter = createTRPCRouter({
 
       let response: Response;
       const endpoint = existingPost?.postId
-        ? `${siteUrl}/wp-json/wp/v2/posts/${existingPost.postId}`
-        : `${siteUrl}/wp-json/wp/v2/posts`;
+        ? `${apiBaseUrl}/posts/${existingPost.postId}`
+        : `${apiBaseUrl}/posts`;
 
       try {
         response = await fetch(endpoint, {
