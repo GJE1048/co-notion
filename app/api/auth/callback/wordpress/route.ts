@@ -10,7 +10,7 @@ const CLIENT_ID = process.env.WORDPRESS_CLIENT_ID;
 const CLIENT_SECRET = process.env.WORDPRESS_CLIENT_SECRET;
 
 export async function GET(req: NextRequest) {
-  const { userId: clerkUserId } = auth();
+  const { userId: clerkUserId } = await auth();
   if (!clerkUserId) {
      const signInUrl = new URL("/sign-in", req.url);
      signInUrl.searchParams.set("redirect_url", req.url);
@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
      return NextResponse.redirect(new URL("/documents?error=wordpress_oauth_config_missing", req.url));
   }
 
-  const callbackUrl = `${req.nextUrl.origin}/api/oauth/wordpress/callback`;
+  const callbackUrl = `${req.nextUrl.origin}/api/auth/callback/wordpress`;
 
   try {
     const tokenRes = await fetch("https://public-api.wordpress.com/oauth2/token", {

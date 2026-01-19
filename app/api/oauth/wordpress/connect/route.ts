@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
   }
 
   // Build the callback URL based on the current origin
-  const callbackUrl = `${req.nextUrl.origin}/api/oauth/wordpress/callback`;
+  const callbackUrl = `${req.nextUrl.origin}/api/auth/callback/wordpress`;
 
   const targetUrl = new URL("https://public-api.wordpress.com/oauth2/authorize");
   targetUrl.searchParams.set("client_id", CLIENT_ID);
