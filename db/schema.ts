@@ -44,6 +44,16 @@ export const workspaces = pgTable("workspaces", {
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+export const workspaceMembers = pgTable("workspace_members", {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, { onDelete: 'cascade' }).notNull(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
+    role: text("role").notNull().default("admin"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+    uniqueMember: uniqueIndex("idx_workspace_member_unique").on(table.workspaceId, table.userId),
+}));
+
 // 更新文档表结构
 export const documents = pgTable("documents",{
     id: uuid("id").primaryKey().defaultRandom(),
@@ -57,6 +67,7 @@ export const documents = pgTable("documents",{
         team: true
     }),
     metadata: jsonb("metadata").default({}),
+    yjsState: text("yjs_state"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
 },(table)=>({
@@ -65,6 +76,16 @@ export const documents = pgTable("documents",{
         foreignColumns: [users.id],
         name: "fk_documents_owner_id",
     }),
+}));
+
+export const documentCollaborators = pgTable("document_collaborators", {
+    id: uuid("id").primaryKey().defaultRandom(),
+    documentId: uuid("document_id").references(() => documents.id, { onDelete: 'cascade' }).notNull(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
+    role: text("role").notNull().default("owner"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+    uniqueCollaborator: uniqueIndex("idx_document_collaborator_unique").on(table.documentId, table.userId),
 }));
 
 // Block 表（核心）
@@ -151,6 +172,8 @@ export const documentTags = pgTable("document_tags", {
 export const usersRelations = relations(users, ({ many }) => ({
     documents: many(documents),
     workspaces: many(workspaces),
+    workspaceMembers: many(workspaceMembers),
+    documentCollaborators: many(documentCollaborators),
     createdBlocks: many(blocks),
     operations: many(operations),
     documentTags: many(documentTags),
@@ -160,6 +183,7 @@ export const workspacesRelations = relations(workspaces, ({ one, many }) => ({
     owner: one(users, { fields: [workspaces.ownerId], references: [users.id] }),
     documents: many(documents),
     tags: many(tags),
+    members: many(workspaceMembers),
 }));
 
 export const documentsRelations = relations(documents, ({ one, many }) => ({
@@ -169,6 +193,7 @@ export const documentsRelations = relations(documents, ({ one, many }) => ({
     operations: many(operations),
     snapshots: many(documentSnapshots),
     tags: many(documentTags),
+    collaborators: many(documentCollaborators),
 }));
 
 export const blocksRelations = relations(blocks, ({ one, many }) => ({
@@ -199,6 +224,16 @@ export const documentTagsRelations = relations(documentTags, ({ one }) => ({
     addedBy: one(users, { fields: [documentTags.addedBy], references: [users.id] }),
 }));
 
+export const workspaceMembersRelations = relations(workspaceMembers, ({ one }) => ({
+    workspace: one(workspaces, { fields: [workspaceMembers.workspaceId], references: [workspaces.id] }),
+    user: one(users, { fields: [workspaceMembers.userId], references: [users.id] }),
+}));
+
+export const documentCollaboratorsRelations = relations(documentCollaborators, ({ one }) => ({
+    document: one(documents, { fields: [documentCollaborators.documentId], references: [documents.id] }),
+    user: one(users, { fields: [documentCollaborators.userId], references: [users.id] }),
+}));
+
 // Schema definitions
 export const insertUserSchema = createInsertSchema(users)
 export const selectUserSchema = createSelectSchema(users)
@@ -208,9 +243,17 @@ export const insertWorkspaceSchema = createInsertSchema(workspaces)
 export const selectWorkspaceSchema = createSelectSchema(workspaces)
 export const updateWorkspaceSchema = createUpdateSchema(workspaces)
 
+export const insertWorkspaceMemberSchema = createInsertSchema(workspaceMembers)
+export const selectWorkspaceMemberSchema = createSelectSchema(workspaceMembers)
+export const updateWorkspaceMemberSchema = createUpdateSchema(workspaceMembers)
+
 export const insertDocumentSchema = createInsertSchema(documents)
 export const selectDocumentSchema = createSelectSchema(documents)
 export const updateDocumentSchema = createUpdateSchema(documents)
+
+export const insertDocumentCollaboratorSchema = createInsertSchema(documentCollaborators)
+export const selectDocumentCollaboratorSchema = createSelectSchema(documentCollaborators)
+export const updateDocumentCollaboratorSchema = createUpdateSchema(documentCollaborators)
 
 export const insertBlockSchema = createInsertSchema(blocks)
 export const selectBlockSchema = createSelectSchema(blocks)

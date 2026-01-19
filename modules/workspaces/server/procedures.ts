@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { protectedProcedure, createTRPCRouter } from "@/trpc/init";
 import { db } from "@/db";
-import { workspaces, documents, tags, documentTags } from "@/db/schema";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { workspaces, documents, tags, documentTags, users, workspaceMembers } from "@/db/schema";
+import { eq, and, desc, sql, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { DEFAULT_WORKSPACE_PERMISSIONS, ensurePersonalWorkspace } from "@/lib/workspace";
 
 const createWorkspaceSchema = z.object({
   name: z.string().min(1, "工作区名称不能为空"),
@@ -23,26 +24,50 @@ const createTagSchema = z.object({
 });
 
 export const workspacesRouter = createTRPCRouter({
-  // 获取用户的所有工作区
+  // 获取用户的所有工作区（通过 clerkId 关联）
   getUserWorkspaces: protectedProcedure
     .query(async ({ ctx }) => {
-      const userWorkspaces = await db
+      const result = await db
         .select({
           id: workspaces.id,
           name: workspaces.name,
+          ownerId: workspaces.ownerId,
           isPersonal: workspaces.isPersonal,
           permissions: workspaces.permissions,
           createdAt: workspaces.createdAt,
           updatedAt: workspaces.updatedAt,
+          memberRole: workspaceMembers.role,
         })
         .from(workspaces)
-        .where(eq(workspaces.ownerId, ctx.user.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(or(eq(workspaces.ownerId, ctx.user.id), eq(workspaceMembers.userId, ctx.user.id)))
         .orderBy(desc(workspaces.createdAt));
 
-      return userWorkspaces;
+      return result.map(r => {
+        const isOwner = r.ownerId === ctx.user.id;
+        let userRole: "creator" | "admin" | "viewer";
+
+        if (isOwner) {
+          userRole = "creator";
+        } else if (r.memberRole === "admin") {
+          userRole = "admin";
+        } else {
+          userRole = "viewer";
+        }
+
+        return {
+          id: r.id,
+          name: r.name,
+          isPersonal: r.isPersonal,
+          permissions: r.permissions,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+          userRole,
+        };
+      });
     }),
 
-  // 获取单个工作区详情
+  // 获取单个工作区详情（通过 clerkId 关联）
   getWorkspace: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
@@ -56,9 +81,10 @@ export const workspacesRouter = createTRPCRouter({
           updatedAt: workspaces.updatedAt,
         })
         .from(workspaces)
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(workspaces.id, input.id),
-          eq(workspaces.ownerId, ctx.user.id)
+          or(eq(workspaces.ownerId, ctx.user.id), eq(workspaceMembers.userId, ctx.user.id))
         ));
 
       if (!workspace) {
@@ -81,7 +107,7 @@ export const workspacesRouter = createTRPCRouter({
           name: input.name,
           ownerId: ctx.user.id,
           isPersonal: input.isPersonal,
-          permissions: { public: false, team: true },
+          permissions: DEFAULT_WORKSPACE_PERMISSIONS,
           metadata: {},
         })
         .returning();
@@ -89,15 +115,18 @@ export const workspacesRouter = createTRPCRouter({
       return newWorkspace;
     }),
 
-  // 更新工作区
+  // 更新工作区（通过 clerkId 关联）
   updateWorkspace: protectedProcedure
     .input(z.object({
       id: z.string(),
       data: updateWorkspaceSchema,
     }))
     .mutation(async ({ ctx, input }) => {
+      // 先验证工作区权限（通过 clerkId）
       const [existingWorkspace] = await db
-        .select()
+        .select({
+          workspace: workspaces,
+        })
         .from(workspaces)
         .where(and(
           eq(workspaces.id, input.id),
@@ -123,12 +152,15 @@ export const workspacesRouter = createTRPCRouter({
       return updatedWorkspace;
     }),
 
-  // 删除工作区
+  // 删除工作区（通过 clerkId 关联）
   deleteWorkspace: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // 先验证工作区权限（通过 clerkId）
       const [existingWorkspace] = await db
-        .select()
+        .select({
+          workspace: workspaces,
+        })
         .from(workspaces)
         .where(and(
           eq(workspaces.id, input.id),
@@ -162,20 +194,23 @@ export const workspacesRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  // 获取工作区的文档
+  // 获取工作区的文档（通过 clerkId 关联）
   getWorkspaceDocuments: protectedProcedure
     .input(z.object({ workspaceId: z.string() }))
     .query(async ({ ctx, input }) => {
-      // 验证工作区权限
-      const [workspace] = await db
-        .select()
+      // 验证工作区权限（通过 clerkId）
+      const [workspaceResult] = await db
+        .select({
+          workspace: workspaces,
+        })
         .from(workspaces)
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(workspaces.id, input.workspaceId),
-          eq(workspaces.ownerId, ctx.user.id)
+          or(eq(workspaces.ownerId, ctx.user.id), eq(workspaceMembers.userId, ctx.user.id))
         ));
 
-      if (!workspace) {
+      if (!workspaceResult) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "工作区不存在",
@@ -191,10 +226,7 @@ export const workspacesRouter = createTRPCRouter({
           updatedAt: documents.updatedAt,
         })
         .from(documents)
-        .where(and(
-          eq(documents.workspaceId, input.workspaceId),
-          eq(documents.ownerId, ctx.user.id)
-        ))
+        .where(eq(documents.workspaceId, input.workspaceId))
         .orderBy(desc(documents.updatedAt));
 
       return workspaceDocuments;
@@ -206,35 +238,23 @@ export const workspacesRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       let workspaceId = input.workspaceId;
 
-      // 如果没有指定工作区，使用用户的默认工作区
       if (!workspaceId) {
-        const [defaultWorkspace] = await db
-          .select()
-          .from(workspaces)
-          .where(and(
-            eq(workspaces.ownerId, ctx.user.id),
-            eq(workspaces.isPersonal, true)
-          ));
-
-        if (!defaultWorkspace) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "未找到默认工作区",
-          });
-        }
-        workspaceId = defaultWorkspace.id;
+        const personalWorkspace = await ensurePersonalWorkspace(ctx.user.id);
+        workspaceId = personalWorkspace.id;
       }
 
-      // 验证工作区权限
-      const [workspace] = await db
-        .select()
+      // 验证工作区权限（通过 clerkId）
+      const [workspaceResult] = await db
+        .select({
+          workspace: workspaces,
+        })
         .from(workspaces)
         .where(and(
           eq(workspaces.id, workspaceId),
           eq(workspaces.ownerId, ctx.user.id)
         ));
 
-      if (!workspace) {
+      if (!workspaceResult) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "工作区不存在",
@@ -255,20 +275,22 @@ export const workspacesRouter = createTRPCRouter({
       return newTag;
     }),
 
-  // 获取工作区的标签
+  // 获取工作区的标签（通过 clerkId 关联）
   getWorkspaceTags: protectedProcedure
     .input(z.object({ workspaceId: z.string() }))
     .query(async ({ ctx, input }) => {
-      // 验证工作区权限
-      const [workspace] = await db
-        .select()
+      // 验证工作区权限（通过 clerkId）
+      const [workspaceResult] = await db
+        .select({
+          workspace: workspaces,
+        })
         .from(workspaces)
         .where(and(
           eq(workspaces.id, input.workspaceId),
           eq(workspaces.ownerId, ctx.user.id)
         ));
 
-      if (!workspace) {
+      if (!workspaceResult) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "工作区不存在",
@@ -363,6 +385,45 @@ export const workspacesRouter = createTRPCRouter({
         .where(eq(tags.id, input.tagId));
 
       return { success: true };
+    }),
+
+  acceptWorkspaceInvite: protectedProcedure
+    .input(z.object({
+      workspaceId: z.string(),
+      role: z.enum(['admin', 'editor', 'viewer']).default('editor'),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const [ws] = await db
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, input.workspaceId));
+
+      if (!ws) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "工作区不存在" });
+      }
+
+      const [existing] = await db
+        .select()
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, input.workspaceId), eq(workspaceMembers.userId, ctx.user.id)));
+
+      if (existing) {
+        await db
+          .update(workspaceMembers)
+          .set({ role: input.role })
+          .where(eq(workspaceMembers.id, existing.id));
+        return { success: true, joined: false };
+      }
+
+      await db
+        .insert(workspaceMembers)
+        .values({
+          workspaceId: input.workspaceId,
+          userId: ctx.user.id,
+          role: input.role,
+        });
+
+      return { success: true, joined: true };
     }),
 
   // 从文档移除标签

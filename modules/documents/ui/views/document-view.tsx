@@ -3,18 +3,26 @@
 import { trpc } from "@/trpc/client";
 import { redirect, notFound } from "next/navigation";
 import { DocumentEditor } from "../components/document-editor";
+import type { documents } from "@/db/schema";
+
+type Document = typeof documents.$inferSelect;
 
 interface DocumentViewProps {
   documentId: string;
 }
 
 export const DocumentView = ({ documentId }: DocumentViewProps) => {
-  // 在开发环境中使用开发模式的查询绕过认证
+  const utils = trpc.useUtils();
+  const cachedDocuments = utils.documents.getUserDocuments.getData();
+  const optimisticDocument = cachedDocuments?.find((doc) => doc.id === documentId);
+
   const {
     data: document,
     isLoading: documentLoading,
-    error: documentError
-  } = trpc.dev.getDocument.useQuery({ id: documentId });
+    error: documentError,
+  } = trpc.documents.getDocument.useQuery({ id: documentId });
+
+  const baseDocument = (document ?? optimisticDocument) as Document | undefined;
 
   if (documentError) {
     if (documentError.data?.code === "NOT_FOUND") {
@@ -34,20 +42,31 @@ export const DocumentView = ({ documentId }: DocumentViewProps) => {
     );
   }
 
-  if (documentLoading || !document) {
+  if (!baseDocument && documentLoading) {
     return (
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="flex items-center justify-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
           <span className="ml-2 text-slate-500">加载文档中...</span>
         </div>
       </div>
     );
   }
 
+  if (baseDocument) {
+    return (
+      <div className="max-w-5xl mx-auto space-y-6">
+        <DocumentEditor document={baseDocument} />
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <DocumentEditor document={document} />
+      <div className="flex items-center justify-center py-12">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+        <span className="ml-2 text-slate-500">加载文档中...</span>
+      </div>
     </div>
   );
 };

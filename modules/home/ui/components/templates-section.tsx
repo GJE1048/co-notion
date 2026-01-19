@@ -12,17 +12,32 @@ import {
   Lightbulb,
   MoreHorizontal
 } from "lucide-react";
+import { trpc } from "@/trpc/client";
 
-const templateCategories = [
+type TemplateItem = {
+  id: string;
+  name: string;
+  description: string;
+};
+
+type TemplateCategory = {
+  id: string;
+  name: string;
+  icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+  color: string;
+  templates: TemplateItem[];
+};
+
+export const TEMPLATE_CATEGORIES: TemplateCategory[] = [
   {
     id: "business",
     name: "商业文档",
     icon: Briefcase,
     color: "text-blue-600 dark:text-blue-400",
     templates: [
-      { name: "会议纪要", description: "高效记录会议内容和决策" },
-      { name: "项目计划", description: "规划和管理项目进度" },
-      { name: "商业提案", description: "创建专业的商业提案" },
+      { id: "meeting-notes", name: "会议纪要", description: "高效记录会议内容和决策" },
+      { id: "project-plan", name: "项目计划", description: "规划和管理项目进度" },
+      { id: "business-proposal", name: "商业提案", description: "创建专业的商业提案" },
     ],
   },
   {
@@ -31,9 +46,9 @@ const templateCategories = [
     icon: GraduationCap,
     color: "text-green-600 dark:text-green-400",
     templates: [
-      { name: "课程笔记", description: "整理课堂学习内容" },
-      { name: "研究论文", description: "学术论文写作模板" },
-      { name: "作业报告", description: "标准作业格式模板" },
+      { id: "course-notes", name: "课程笔记", description: "整理课堂学习内容" },
+      { id: "research-paper", name: "研究论文", description: "学术论文写作模板" },
+      { id: "assignment-report", name: "作业报告", description: "标准作业格式模板" },
     ],
   },
   {
@@ -42,9 +57,9 @@ const templateCategories = [
     icon: Lightbulb,
     color: "text-purple-600 dark:text-purple-400",
     templates: [
-      { name: "小说大纲", description: "构建小说结构框架" },
-      { name: "博客文章", description: "专业博客写作模板" },
-      { name: "创意日记", description: "记录灵感和想法" },
+      { id: "novel-outline", name: "小说大纲", description: "构建小说结构框架" },
+      { id: "blog-article", name: "博客文章", description: "专业博客写作模板" },
+      { id: "creative-journal", name: "创意日记", description: "记录灵感和想法" },
     ],
   },
 ];
@@ -52,6 +67,7 @@ const templateCategories = [
 export const TemplatesSection = () => {
   const router = useRouter();
   const { isSignedIn, isLoaded } = useAuth();
+  const createDocumentMutation = trpc.documents.createDocument.useMutation();
 
   const handleBrowseAllClick = () => {
     if (!isLoaded) return;
@@ -65,7 +81,7 @@ export const TemplatesSection = () => {
     router.push("/templates");
   };
 
-  const handleTemplateClick = (templateName: string) => {
+  const handleTemplateClick = async (template: TemplateItem) => {
     if (!isLoaded) return;
 
     if (!isSignedIn) {
@@ -73,8 +89,15 @@ export const TemplatesSection = () => {
       return;
     }
 
-    // TODO: 实现模板使用逻辑
-    console.log("使用模板:", templateName);
+    try {
+      const newDocument = await createDocumentMutation.mutateAsync({
+        title: template.name,
+        templateId: template.id,
+      });
+      router.push(`/documents/${newDocument.id}`);
+    } catch (error) {
+      console.error("使用模板创建文档失败:", error);
+    }
   };
 
   return (
@@ -93,7 +116,7 @@ export const TemplatesSection = () => {
         </Button>
       </CardHeader>
       <CardContent className="space-y-6">
-        {templateCategories.map((category) => (
+        {TEMPLATE_CATEGORIES.map((category) => (
           <div key={category.id} className="space-y-3">
             <div className="flex items-center gap-2">
               <category.icon className={`size-5 ${category.color}`} />
@@ -110,7 +133,7 @@ export const TemplatesSection = () => {
                 <div
                   key={index}
                   className="group p-4 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all cursor-pointer"
-                  onClick={() => handleTemplateClick(template.name)}
+                  onClick={() => handleTemplateClick(template)}
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="p-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400 group-hover:bg-slate-200 dark:group-hover:bg-slate-600 transition-colors">

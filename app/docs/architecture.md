@@ -68,17 +68,55 @@
 
 ### 1. 实时协同编辑模块
 
-**技术实现**:
-- **算法**: CRDT (Conflict-free Replicated Data Types)
-- **协议**: WebSocket + Operational Transformation
-- **数据结构**: Yjs / Automerge
-- **冲突解决**: 基于时间戳和操作ID的冲突检测
+**整体思路**:
+- 以 Block 为最小编辑单元（类似 Notion）
+- 使用 Yjs 提供的 CRDT 能力管理 Block 列表和 Block 内容
+- 通过 WebSocket 进行增量同步和在线状态广播
+- 后端定期将 Yjs 状态持久化到数据库
+
+**核心数据结构（Yjs 层）**:
+
+- 顶层使用 `Y.Doc` 表示一份文档的协同状态
+- 使用 `Y.Array<Y.Map>` 表示 Block 列表，保持顺序和可插入/删除
+- 每个 Block 使用 `Y.Map` 表示，可按字段级别进行 CRDT 合并
+
+示例结构：
+
+```ts
+// Y.Doc 根结构
+const ydoc = new Y.Doc();
+const yBlocks = ydoc.getArray<Y.Map<unknown>>("blocks");
+
+// 单个 Block
+const block = new Y.Map<unknown>();
+block.set("id", "blk_1");
+block.set("type", "paragraph");
+block.set("content", new Y.Text("Hello world"));
+block.set("props", { color: "red" });
+
+yBlocks.push([block]);
+```
+
+**协议与服务组件**:
+- 协同协议：基于 WebSocket 的二进制增量同步（Yjs 更新包）
+- WebSocket 服务：Node.js + `ws` / `y-websocket`
+- 在线状态与光标：使用 Yjs Awareness 协议广播 `presence` 和 `cursor` 信息
+- 后端持久化：周期性将 `Y.encodeStateAsUpdate(ydoc)` 的结果写入 PostgreSQL
+
+**与 Block 数据模型的关系**:
+- 数据库中的 `blocks` 表负责：
+  - 为 Block 提供稳定的 ID、类型、排序字段等元数据
+  - 支持基于 Block 的查询和权限控制
+- Yjs 文档负责：
+  - 在内存中维护 Block 列表及内容的实时协同状态
+  - 自动解决并发写入冲突
+  - 提供离线编辑和自动恢复能力
 
 **架构特点**:
-- 支持多用户并发编辑
-- 离线编辑与在线同步
-- 操作压缩与优化
-- 实时光标位置显示
+- 支持多用户并发编辑同一文档、多 Block 同时编辑
+- Block 粒度的 CRDT 合并，避免整篇文档冲突
+- 通过增量更新降低网络流量
+- 光标、选区和在线状态实时同步
 
 ### 2. AI智能写作辅助模块
 

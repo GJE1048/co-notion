@@ -24,7 +24,7 @@ cleanDbUrl = cleanDbUrl.replace(/^['"]|['"]$/g, "");
 
 const pool = new Pool({
   connectionString: cleanDbUrl,
-  max: cleanDbUrl.includes("neon.tech") ? 5 : 20, // Neon 使用较小的连接池
+  max: cleanDbUrl.includes("neon.tech") ? 15 : 20, // Neon 使用较小的连接池
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: cleanDbUrl.includes("neon.tech") ? 10000 : 2000, // Neon 使用更长的超时
   query_timeout: 10000, // 查询超时 10秒

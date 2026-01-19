@@ -1,9 +1,11 @@
 import { z } from "zod";
 import { protectedProcedure, createTRPCRouter } from "@/trpc/init";
 import { db } from "@/db";
-import { blocks, documents, operations } from "@/db/schema";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { blocks, documents, operations, documentCollaborators, workspaces, workspaceMembers } from "@/db/schema";
+import { eq, and, desc, sql, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { notifyDocumentUpdated } from "@/realtime/notify";
+import { redis } from "@/lib/redis";
 
 export const blocksRouter = createTRPCRouter({
   // 获取单个 Block 详情
@@ -26,9 +28,17 @@ export const blocksRouter = createTRPCRouter({
         })
         .from(blocks)
         .innerJoin(documents, eq(blocks.documentId, documents.id))
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(blocks.id, input.id),
-          eq(documents.ownerId, ctx.user.id)
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
         ));
 
       if (!block) {
@@ -45,6 +55,7 @@ export const blocksRouter = createTRPCRouter({
   updateBlock: protectedProcedure
     .input(z.object({
       id: z.string(),
+      clientId: z.string().optional(),
       data: z.object({
         type: z.enum([
           'page', 'heading_1', 'heading_2', 'heading_3',
@@ -63,12 +74,25 @@ export const blocksRouter = createTRPCRouter({
         .select({
           block: blocks,
           document: documents,
+          collaboratorUserId: documentCollaborators.userId,
+          workspaceOwnerId: workspaces.ownerId,
+          workspaceMemberUserId: workspaceMembers.userId,
         })
         .from(blocks)
         .innerJoin(documents, eq(blocks.documentId, documents.id))
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(eq(blocks.id, input.id));
 
-      if (!block || block.document.ownerId !== ctx.user.id) {
+      const hasAccess =
+        !!block &&
+        (block.document.ownerId === ctx.user.id ||
+          block.collaboratorUserId === ctx.user.id ||
+          block.workspaceOwnerId === ctx.user.id ||
+          block.workspaceMemberUserId === ctx.user.id);
+
+      if (!block || !hasAccess) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Block 不存在或无权限访问",
@@ -85,27 +109,65 @@ export const blocksRouter = createTRPCRouter({
         .where(eq(blocks.id, input.id))
         .returning();
 
-      // TODO: 记录操作日志
-      // await recordOperation(block.document.id, 'update_block', input.data, ctx.user.id);
+      const [lastOperation] = await db
+        .select({ version: operations.version })
+        .from(operations)
+        .where(eq(operations.documentId, block.document.id))
+        .orderBy(desc(operations.version))
+        .limit(1);
+
+      const nextVersion = lastOperation ? lastOperation.version + 1 : 1;
+
+      await db.insert(operations).values({
+        documentId: block.document.id,
+        blockId: updatedBlock.id,
+        type: "update_block",
+        payload: input.data as Record<string, unknown>,
+        clientId: input.clientId ?? ctx.user.id,
+        userId: ctx.user.id,
+        version: nextVersion,
+      });
+
+      void notifyDocumentUpdated(block.document.id, nextVersion);
+
+      if (redis) {
+        await redis.del(`blocks:${block.document.id}:page:1`);
+      }
 
       return updatedBlock;
     }),
 
   // 删除 Block
   deleteBlock: protectedProcedure
-    .input(z.object({ id: z.string() }))
+    .input(z.object({
+      id: z.string(),
+      clientId: z.string().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       // 验证 Block 权限
       const [block] = await db
         .select({
           block: blocks,
           document: documents,
+          collaboratorUserId: documentCollaborators.userId,
+          workspaceOwnerId: workspaces.ownerId,
+          workspaceMemberUserId: workspaceMembers.userId,
         })
         .from(blocks)
         .innerJoin(documents, eq(blocks.documentId, documents.id))
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(eq(blocks.id, input.id));
 
-      if (!block || block.document.ownerId !== ctx.user.id) {
+      const hasAccess =
+        !!block &&
+        (block.document.ownerId === ctx.user.id ||
+          block.collaboratorUserId === ctx.user.id ||
+          block.workspaceOwnerId === ctx.user.id ||
+          block.workspaceMemberUserId === ctx.user.id);
+
+      if (!block || !hasAccess) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Block 不存在或无权限访问",
@@ -116,8 +178,30 @@ export const blocksRouter = createTRPCRouter({
         .delete(blocks)
         .where(eq(blocks.id, input.id));
 
-      // TODO: 记录操作日志
-      // await recordOperation(block.document.id, 'delete_block', { blockId: input.id }, ctx.user.id);
+      const [lastOperation] = await db
+        .select({ version: operations.version })
+        .from(operations)
+        .where(eq(operations.documentId, block.document.id))
+        .orderBy(desc(operations.version))
+        .limit(1);
+
+      const nextVersion = lastOperation ? lastOperation.version + 1 : 1;
+
+      await db.insert(operations).values({
+        documentId: block.document.id,
+        blockId: null,
+        type: "delete_block",
+        payload: { blockId: input.id } as Record<string, unknown>,
+        clientId: input.clientId ?? ctx.user.id,
+        userId: ctx.user.id,
+        version: nextVersion,
+      });
+
+      void notifyDocumentUpdated(block.document.id, nextVersion);
+
+      if (redis) {
+        await redis.del(`blocks:${block.document.id}:page:1`);
+      }
 
       return { success: true };
     }),
@@ -133,9 +217,17 @@ export const blocksRouter = createTRPCRouter({
       const [document] = await db
         .select()
         .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(documents.id, input.documentId),
-          eq(documents.ownerId, ctx.user.id)
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
         ));
 
       if (!document) {
@@ -168,15 +260,24 @@ export const blocksRouter = createTRPCRouter({
         id: z.string(),
         position: z.number(),
       })),
+      clientId: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       // 验证文档权限
       const [document] = await db
         .select()
         .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(documents.id, input.documentId),
-          eq(documents.ownerId, ctx.user.id)
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
         ));
 
       if (!document) {
@@ -206,30 +307,65 @@ export const blocksRouter = createTRPCRouter({
 
       await Promise.all(updatePromises);
 
-      // TODO: 记录操作日志
-      // await recordOperation(input.documentId, 'reorder_blocks', input, ctx.user.id);
+      const [lastOperation] = await db
+        .select({ version: operations.version })
+        .from(operations)
+        .where(eq(operations.documentId, input.documentId))
+        .orderBy(desc(operations.version))
+        .limit(1);
+
+      const nextVersion = lastOperation ? lastOperation.version + 1 : 1;
+
+      await db.insert(operations).values({
+        documentId: input.documentId,
+        blockId: null,
+        type: "reorder_blocks",
+        payload: input as Record<string, unknown>,
+        clientId: input.clientId ?? ctx.user.id,
+        userId: ctx.user.id,
+        version: nextVersion,
+      });
+
+      void notifyDocumentUpdated(input.documentId, nextVersion);
+
+      if (redis) {
+        await redis.del(`blocks:${input.documentId}:page:1`);
+      }
 
       return { success: true };
     }),
 
   // 复制 Block
   duplicateBlock: protectedProcedure
-    .input(z.object({ id: z.string() }))
+    .input(z.object({
+      id: z.string(),
+      clientId: z.string().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       // 获取原 Block
       const [originalBlock] = await db
         .select({
           block: blocks,
           document: documents,
+          collaboratorUserId: documentCollaborators.userId,
+          workspaceOwnerId: workspaces.ownerId,
+          workspaceMemberUserId: workspaceMembers.userId,
         })
         .from(blocks)
         .innerJoin(documents, eq(blocks.documentId, documents.id))
-        .where(and(
-          eq(blocks.id, input.id),
-          eq(documents.ownerId, ctx.user.id)
-        ));
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(eq(blocks.id, input.id));
 
-      if (!originalBlock) {
+      const hasAccess =
+        !!originalBlock &&
+        (originalBlock.document.ownerId === ctx.user.id ||
+          originalBlock.collaboratorUserId === ctx.user.id ||
+          originalBlock.workspaceOwnerId === ctx.user.id ||
+          originalBlock.workspaceMemberUserId === ctx.user.id);
+
+      if (!originalBlock || !hasAccess) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Block 不存在",
@@ -261,11 +397,33 @@ export const blocksRouter = createTRPCRouter({
         })
         .returning();
 
-      // TODO: 记录操作日志
-      // await recordOperation(originalBlock.document.id, 'duplicate_block', {
-      //   originalId: input.id,
-      //   duplicatedId: duplicatedBlock.id
-      // }, ctx.user.id);
+      const [lastOperation] = await db
+        .select({ version: operations.version })
+        .from(operations)
+        .where(eq(operations.documentId, originalBlock.document.id))
+        .orderBy(desc(operations.version))
+        .limit(1);
+
+      const nextVersion = lastOperation ? lastOperation.version + 1 : 1;
+
+      await db.insert(operations).values({
+        documentId: originalBlock.document.id,
+        blockId: duplicatedBlock.id,
+        type: "duplicate_block",
+        payload: {
+          originalId: input.id,
+          duplicatedId: duplicatedBlock.id,
+        } as Record<string, unknown>,
+        clientId: input.clientId ?? ctx.user.id,
+        userId: ctx.user.id,
+        version: nextVersion,
+      });
+
+      void notifyDocumentUpdated(originalBlock.document.id, nextVersion);
+
+      if (redis) {
+        await redis.del(`blocks:${originalBlock.document.id}:page:1`);
+      }
 
       return duplicatedBlock;
     }),
@@ -282,9 +440,17 @@ export const blocksRouter = createTRPCRouter({
       const [document] = await db
         .select()
         .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(and(
           eq(documents.id, input.documentId),
-          eq(documents.ownerId, ctx.user.id)
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          )
         ));
 
       if (!document) {
@@ -294,7 +460,7 @@ export const blocksRouter = createTRPCRouter({
         });
       }
 
-      let whereConditions = [
+      const whereConditions = [
         eq(blocks.documentId, input.documentId),
       ];
 
@@ -348,31 +514,40 @@ export const blocksRouter = createTRPCRouter({
         .select({
           block: blocks,
           document: documents,
+          collaboratorUserId: documentCollaborators.userId,
+          workspaceOwnerId: workspaces.ownerId,
+          workspaceMemberUserId: workspaceMembers.userId,
         })
         .from(blocks)
         .innerJoin(documents, eq(blocks.documentId, documents.id))
-        .where(and(
-          eq(blocks.id, input.blockId),
-          eq(documents.ownerId, ctx.user.id)
-        ));
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(eq(blocks.id, input.blockId));
 
-      if (!block) {
+      const hasAccess =
+        !!block &&
+        (block.document.ownerId === ctx.user.id ||
+          block.collaboratorUserId === ctx.user.id ||
+          block.workspaceOwnerId === ctx.user.id ||
+          block.workspaceMemberUserId === ctx.user.id);
+
+      if (!block || !hasAccess) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Block 不存在",
         });
       }
 
-      // TODO: 实现操作历史查询
-      // const operations = await db
-      //   .select()
-      //   .from(operations)
-      //   .where(eq(operations.blockId, input.blockId))
-      //   .orderBy(desc(operations.timestamp))
-      //   .limit(input.limit);
+      const history = await db
+        .select()
+        .from(operations)
+        .where(eq(operations.blockId, input.blockId))
+        .orderBy(desc(operations.timestamp))
+        .limit(input.limit);
 
       return {
-        operations: [], // 暂时返回空数组
+        operations: history,
         block: block.block,
       };
     }),
