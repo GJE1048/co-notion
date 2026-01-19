@@ -7,6 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { notifyDocumentUpdated } from "@/realtime/notify";
 import { ensurePersonalWorkspace } from "@/lib/workspace";
 import { redis } from "@/lib/redis";
+import { encrypt, decrypt } from "@/lib/crypto";
 
 // Schema definitions
 const createDocumentSchema = z.object({
@@ -216,6 +217,7 @@ const uploadMediaToWordpress = async (
     authType?: string;
     username?: string;
     applicationPassword?: string;
+    encryptedPassword?: string;
     accessToken?: string;
   };
   
@@ -223,7 +225,8 @@ const uploadMediaToWordpress = async (
   if (credential.authType === "oauth" && credential.accessToken) {
     authHeader = `Bearer ${credential.accessToken}`;
   } else {
-    const authString = `${credential.username}:${credential.applicationPassword}`;
+    const password = credential.applicationPassword || (credential.encryptedPassword ? decrypt(credential.encryptedPassword) : "");
+    const authString = `${credential.username}:${password}`;
     const basic = Buffer.from(authString, "utf8").toString("base64");
     authHeader = `Basic ${basic}`;
   }
@@ -1860,7 +1863,7 @@ export const documentsRouter = createTRPCRouter({
           credential: {
             authType: input.authType,
             username: input.username,
-            applicationPassword: input.applicationPassword,
+            encryptedPassword: input.applicationPassword ? encrypt(input.applicationPassword) : undefined,
           },
         })
         .returning({
@@ -1901,14 +1904,16 @@ export const documentsRouter = createTRPCRouter({
         authType?: string;
         username?: string;
         applicationPassword?: string;
+        encryptedPassword?: string;
         accessToken?: string;
       };
 
       let headers: Record<string, string>;
       if (credential.authType === "oauth" && credential.accessToken) {
         headers = { Authorization: `Bearer ${credential.accessToken}` };
-      } else if (credential.username && credential.applicationPassword) {
-        const authString = `${credential.username}:${credential.applicationPassword}`;
+      } else if (credential.username && (credential.applicationPassword || credential.encryptedPassword)) {
+        const password = credential.applicationPassword || decrypt(credential.encryptedPassword!);
+        const authString = `${credential.username}:${password}`;
         const basic = Buffer.from(authString, "utf8").toString("base64");
         headers = { Authorization: `Basic ${basic}` };
       } else {
@@ -2003,6 +2008,7 @@ export const documentsRouter = createTRPCRouter({
         authType?: string;
         username?: string;
         applicationPassword?: string;
+        encryptedPassword?: string;
         accessToken?: string;
       };
 
@@ -2016,8 +2022,9 @@ export const documentsRouter = createTRPCRouter({
       let authHeader = "";
       if (credential.authType === "oauth" && credential.accessToken) {
          authHeader = `Bearer ${credential.accessToken}`;
-      } else if (credential.username && credential.applicationPassword) {
-         const authString = `${credential.username}:${credential.applicationPassword}`;
+      } else if (credential.username && (credential.applicationPassword || credential.encryptedPassword)) {
+         const password = credential.applicationPassword || decrypt(credential.encryptedPassword!);
+         const authString = `${credential.username}:${password}`;
          const basic = Buffer.from(authString, "utf8").toString("base64");
          authHeader = `Basic ${basic}`;
       } else {

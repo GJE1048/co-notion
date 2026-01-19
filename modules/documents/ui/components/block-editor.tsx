@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
-import { Type, Heading1, Heading2, Heading3, List, Code, Image, FileText, Quote, CheckSquare, Minus, Plus } from "lucide-react";
+import { Type, Heading1, Heading2, Heading3, List, Code, Image, FileText, Quote, CheckSquare, Minus, Plus, Loader2, Upload } from "lucide-react";
 import type { blocks } from "@/db/schema";
+import { trpc } from "@/trpc/client";
 
 type Block = typeof blocks.$inferSelect;
 
@@ -56,6 +57,48 @@ const BlockComponent = ({
   onSelectionChange,
 }: BlockComponentProps) => {
   const [isEditing, setIsEditing] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const getUploadUrlMutation = trpc.storage.getUploadUrl.useMutation();
+
+  const handleImageUpload = async (file: File) => {
+    try {
+      setIsUploading(true);
+      
+      // 1. 获取预签名 URL
+      const { uploadUrl, fileUrl } = await getUploadUrlMutation.mutateAsync({
+        filename: file.name,
+        contentType: file.type,
+      });
+
+      // 2. 上传文件到 S3
+      await fetch(uploadUrl, {
+        method: "PUT",
+        body: file,
+        headers: {
+          "Content-Type": file.type,
+        },
+      });
+
+      // 3. 更新 Block 内容
+      handleContentUpdate({
+        image: {
+          url: fileUrl,
+          caption: file.name,
+        }
+      });
+    } catch (error) {
+      console.error("Image upload failed:", error);
+      alert("图片上传失败，请重试");
+    } finally {
+      setIsUploading(false);
+      // 清空 input 防止重复选择同一文件不触发 onChange
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
 
   const handleSelectionChange = useCallback(
     (target: HTMLTextAreaElement | HTMLInputElement) => {
@@ -321,17 +364,56 @@ const BlockComponent = ({
                 className="max-w-full h-auto rounded-lg"
               />
             ) : (
-              <div className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg p-8 text-center">
-                <p className="text-slate-500">点击上传图片</p>
-                <Input
-                  type="url"
-                  onChange={(e) => handleContentUpdate({
-                    image: { url: e.target.value, caption: '' }
-                  })}
-                  placeholder="输入图片 URL..."
-                  className="mt-2"
-                  readOnly={readOnly}
+              <div 
+                className={`border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg p-8 text-center transition-colors ${
+                  isUploading ? "bg-slate-50 dark:bg-slate-800" : "hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                }`}
+                onClick={() => !isUploading && !readOnly && fileInputRef.current?.click()}
+              >
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  className="hidden"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      handleImageUpload(file);
+                    }
+                  }}
+                  disabled={readOnly || isUploading}
                 />
+                
+                {isUploading ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <Loader2 className="size-8 animate-spin text-blue-500" />
+                    <p className="text-slate-500">正在上传图片...</p>
+                  </div>
+                ) : (
+                  <>
+                    <Upload className="size-8 mx-auto mb-2 text-slate-400" />
+                    <p className="text-slate-500 font-medium">点击上传图片</p>
+                    <p className="text-xs text-slate-400 mt-1">支持 JPG, PNG, GIF, WebP</p>
+                    <div className="relative mt-4">
+                      <div className="absolute inset-0 flex items-center">
+                        <span className="w-full border-t border-slate-200 dark:border-slate-700" />
+                      </div>
+                      <div className="relative flex justify-center text-xs uppercase">
+                        <span className="bg-white dark:bg-slate-950 px-2 text-slate-500">或者输入 URL</span>
+                      </div>
+                    </div>
+                    <Input
+                      type="url"
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => handleContentUpdate({
+                        image: { url: e.target.value, caption: '' }
+                      })}
+                      placeholder="https://example.com/image.png"
+                      className="mt-4"
+                      readOnly={readOnly}
+                    />
+                  </>
+                )}
               </div>
             )}
             {(block.content as { image?: { caption?: string } })?.image?.caption && (
@@ -550,7 +632,7 @@ export const BlockEditor = ({
           block={block}
           onUpdate={(updates) => onBlockUpdate(block.id, updates)}
           onDelete={() => onBlockDelete(block.id)}
-          onCreateAfter={(type) => handleCreateAfter(block.id, type)}
+          onCreateAfter={(type) => handleCreateAfter(block.id, type as Block["type"])}
           remoteCursors={remoteCursors.filter((cursor) => cursor.blockId === block.id)}
           onFocus={() => onBlockFocus?.(block.id)}
           onSelectionChange={

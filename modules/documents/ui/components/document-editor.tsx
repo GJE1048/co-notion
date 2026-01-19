@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Loader2, Save, ArrowLeft, Plus, Heading1, List, Code, Share, Copy, Trash2, Bot, Send, X, Globe2 } from "lucide-react";
 import { trpc } from "@/trpc/client";
+import { PublishToWordpressDialog } from "./publish-to-wordpress-dialog";
 import { BlockEditor } from "./block-editor";
 import type { documents, blocks, operations as operationsTable } from "@/db/schema";
 
@@ -225,7 +226,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const visibleMembers = documentMembers.slice(0, 5);
   const extraMemberCount = documentMembers.length - visibleMembers.length;
   const { data: currentUser } = trpc.documents.getCurrentUserProfile.useQuery();
-  const { data: wordpressSites, isLoading: isLoadingWordpressSites } = trpc.documents.getWordpressSites.useQuery();
   const canEditDocument = (() => {
     if (!currentUser) {
       return false;
@@ -711,20 +711,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const [isShareOpen, setIsShareOpen] = useState(false);
   const isDeletingDocument = deleteDocumentMutation.isPending;
   const isDuplicatingDocument = duplicateDocumentMutation.isPending;
-  const publishToWordpressMutation = trpc.documents.publishToWordpress.useMutation();
-  const isPublishing = publishToWordpressMutation.isPending;
   const [isPublishOpen, setIsPublishOpen] = useState(false);
-  const [selectedWordpressSiteId, setSelectedWordpressSiteId] = useState("");
-  const [publishStatus, setPublishStatus] = useState<"draft" | "publish">("draft");
-  const [publishSlug, setPublishSlug] = useState("");
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [publishError, setPublishError] = useState<string | null>(null);
-
-  const { data: wordpressTaxonomies, isLoading: isLoadingTaxonomies } = trpc.documents.getWordpressTaxonomies.useQuery(
-    { siteId: selectedWordpressSiteId },
-    { enabled: !!selectedWordpressSiteId }
-  );
 
   const handleBlockCreate = useCallback(
     async (blockData: Omit<Block, "id" | "createdAt" | "updatedAt">) => {
@@ -1234,16 +1221,6 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   }, [toastMessage]);
 
   useEffect(() => {
-    if (selectedWordpressSiteId) {
-      return;
-    }
-    if (!wordpressSites || !wordpressSites.length) {
-      return;
-    }
-    setSelectedWordpressSiteId(wordpressSites[0].id);
-  }, [wordpressSites, selectedWordpressSiteId]);
-
-  useEffect(() => {
     const timer = setTimeout(() => {
       if (canEditDocument && title !== initialDocument.title) {
         handleSave();
@@ -1695,10 +1672,9 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
           {canEditDocument && (
             <Button
               onClick={() => {
-                setPublishError(null);
                 setIsPublishOpen(true);
               }}
-              disabled={isLoading || isPublishing}
+              disabled={isLoading}
               size="sm"
               variant="outline"
               className="flex items-center gap-2"
@@ -2376,225 +2352,12 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
         </div>
       )}
 
-      <Dialog
+      <PublishToWordpressDialog
         open={isPublishOpen}
-        onOpenChange={(open) => {
-          if (!open && !isPublishing) {
-            setIsPublishOpen(false);
-            setPublishError(null);
-          }
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>发布到 WordPress</DialogTitle>
-            <DialogDescription>
-              选择已绑定的 WordPress 站点，并设置发布选项。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                站点
-              </label>
-              {isLoadingWordpressSites ? (
-                <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-                  正在加载站点列表...
-                </div>
-              ) : !wordpressSites || wordpressSites.length === 0 ? (
-                <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-                  你还没有绑定任何 WordPress 站点，请前往文档列表页先绑定站点。
-                </div>
-              ) : (
-                <select
-                  className="mt-1 w-full border rounded-md p-2 bg-white dark:bg-slate-900"
-                  value={selectedWordpressSiteId}
-                  onChange={(e) => setSelectedWordpressSiteId(e.target.value)}
-                  disabled={isPublishing}
-                >
-                  {wordpressSites.map((site) => (
-                    <option key={site.id} value={site.id}>
-                      {site.displayName}（{site.siteUrl}）
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-            <div>
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                发布状态
-              </label>
-              <select
-                className="mt-1 w-full border rounded-md p-2 bg-white dark:bg-slate-900"
-                value={publishStatus}
-                onChange={(e) => setPublishStatus(e.target.value as "draft" | "publish")}
-                disabled={isPublishing}
-              >
-                <option value="draft">草稿</option>
-                <option value="publish">立即发布</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                自定义路径（slug，可选）
-              </label>
-              <Input
-                type="text"
-                placeholder="例如：my-first-post"
-                value={publishSlug}
-                onChange={(e) => setPublishSlug(e.target.value)}
-                disabled={isPublishing}
-                className="mt-1"
-              />
-            </div>
-            
-            <div>
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 block">
-                分类（可选）
-              </label>
-              {isLoadingTaxonomies ? (
-                 <div className="text-sm text-slate-500">加载分类中...</div>
-              ) : wordpressTaxonomies?.categories?.length ? (
-                <div className="border rounded-md p-2 max-h-32 overflow-y-auto space-y-2 bg-white dark:bg-slate-900">
-                  {wordpressTaxonomies.categories.map(cat => (
-                    <div key={cat.id} className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id={`cat-${cat.id}`}
-                        checked={selectedCategories.includes(cat.id)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedCategories(prev => [...prev, cat.id]);
-                          } else {
-                            setSelectedCategories(prev => prev.filter(id => id !== cat.id));
-                          }
-                        }}
-                        className="rounded border-slate-300"
-                        disabled={isPublishing}
-                      />
-                      <label htmlFor={`cat-${cat.id}`} className="text-sm cursor-pointer select-none flex-1">
-                        {cat.name}
-                      </label>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-sm text-slate-500">无可用分类</div>
-              )}
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 block">
-                标签（可选）
-              </label>
-              {isLoadingTaxonomies ? (
-                 <div className="text-sm text-slate-500">加载标签中...</div>
-              ) : wordpressTaxonomies?.tags?.length ? (
-                <div className="border rounded-md p-2 max-h-32 overflow-y-auto space-y-2 bg-white dark:bg-slate-900">
-                  {wordpressTaxonomies.tags.map(tag => (
-                    <div key={tag.id} className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id={`tag-${tag.id}`}
-                        checked={selectedTags.includes(tag.id)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedTags(prev => [...prev, tag.id]);
-                          } else {
-                            setSelectedTags(prev => prev.filter(id => id !== tag.id));
-                          }
-                        }}
-                        className="rounded border-slate-300"
-                        disabled={isPublishing}
-                      />
-                      <label htmlFor={`tag-${tag.id}`} className="text-sm cursor-pointer select-none flex-1">
-                        {tag.name}
-                      </label>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-sm text-slate-500">无可用标签</div>
-              )}
-            </div>
-
-            {publishError && (
-              <p className="text-sm text-red-600 dark:text-red-400">
-                {publishError}
-              </p>
-            )}
-          </div>
-          <DialogFooter className="pt-4">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                if (isPublishing) return;
-                setIsPublishOpen(false);
-                setPublishError(null);
-              }}
-              disabled={isPublishing}
-            >
-              取消
-            </Button>
-            <Button
-              type="button"
-              onClick={async () => {
-                if (!wordpressSites || !wordpressSites.length) {
-                  setPublishError("请先绑定 WordPress 站点");
-                  return;
-                }
-                if (!selectedWordpressSiteId) {
-                  setPublishError("请选择要发布的站点");
-                  return;
-                }
-                try {
-                  setPublishError(null);
-                  const result = await publishToWordpressMutation.mutateAsync({
-                    documentId: initialDocument.id,
-                    target: {
-                      type: "wordpress",
-                      siteId: selectedWordpressSiteId,
-                    },
-                    options: {
-                      status: publishStatus,
-                      slug: publishSlug || undefined,
-                      categories: selectedCategories,
-                      tags: selectedTags,
-                    },
-                  });
-                  if (result.status === "success") {
-                    setToastMessage("已发布到 WordPress");
-                    setIsPublishOpen(false);
-                    setPublishError(null);
-                  } else {
-                    setPublishError(result.errorMessage || "发布到 WordPress 失败");
-                  }
-                } catch (err) {
-                  const message =
-                    err instanceof Error ? err.message : "发布到 WordPress 失败";
-                  setPublishError(message);
-                }
-              }}
-              disabled={
-                isPublishing ||
-                !wordpressSites ||
-                !wordpressSites.length ||
-                !selectedWordpressSiteId
-              }
-            >
-              {isPublishing ? (
-                <>
-                  <Loader2 className="size-4 animate-spin mr-2" />
-                  发布中...
-                </>
-              ) : (
-                "确认发布"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={setIsPublishOpen}
+        documentId={initialDocument.id}
+        documentTitle={title}
+      />
 
       <Dialog
         open={confirmDeleteOpen}
