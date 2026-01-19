@@ -216,9 +216,17 @@ const uploadMediaToWordpress = async (
     authType?: string;
     username?: string;
     applicationPassword?: string;
+    accessToken?: string;
   };
-  const authString = `${credential.username}:${credential.applicationPassword}`;
-  const basic = Buffer.from(authString, "utf8").toString("base64");
+  
+  let authHeader = "";
+  if (credential.authType === "oauth" && credential.accessToken) {
+    authHeader = `Bearer ${credential.accessToken}`;
+  } else {
+    const authString = `${credential.username}:${credential.applicationPassword}`;
+    const basic = Buffer.from(authString, "utf8").toString("base64");
+    authHeader = `Basic ${basic}`;
+  }
 
   try {
     let buffer: Buffer;
@@ -257,7 +265,7 @@ const uploadMediaToWordpress = async (
     const response = await fetch(`${siteUrl}/wp-json/wp/v2/media`, {
       method: "POST",
       headers: {
-        Authorization: `Basic ${basic}`,
+        Authorization: authHeader,
         "Content-Disposition": `attachment; filename="${filename}"`,
         "Content-Type": contentType,
       },
@@ -1871,6 +1879,60 @@ export const documentsRouter = createTRPCRouter({
         validation,
       };
     }),
+  getWordpressTaxonomies: protectedProcedure
+    .input(z.object({
+      siteId: z.string(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const [site] = await db
+        .select()
+        .from(wordpressSites)
+        .where(and(eq(wordpressSites.id, input.siteId), eq(wordpressSites.ownerId, ctx.user.id)));
+
+      if (!site) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "无权访问该 WordPress 站点",
+        });
+      }
+
+      const siteUrl = normalizeSiteUrl(site.siteUrl);
+      const credential = site.credential as {
+        authType?: string;
+        username?: string;
+        applicationPassword?: string;
+        accessToken?: string;
+      };
+
+      let headers: Record<string, string>;
+      if (credential.authType === "oauth" && credential.accessToken) {
+        headers = { Authorization: `Bearer ${credential.accessToken}` };
+      } else if (credential.username && credential.applicationPassword) {
+        const authString = `${credential.username}:${credential.applicationPassword}`;
+        const basic = Buffer.from(authString, "utf8").toString("base64");
+        headers = { Authorization: `Basic ${basic}` };
+      } else {
+        return { categories: [], tags: [] };
+      }
+
+      try {
+        const [categoriesRes, tagsRes] = await Promise.all([
+          fetch(`${siteUrl}/wp-json/wp/v2/categories?per_page=100`, { headers }),
+          fetch(`${siteUrl}/wp-json/wp/v2/tags?per_page=100`, { headers }),
+        ]);
+
+        const categories = categoriesRes.ok ? await categoriesRes.json() as { id: number; name: string }[] : [];
+        const tags = tagsRes.ok ? await tagsRes.json() as { id: number; name: string }[] : [];
+
+        return {
+          categories: Array.isArray(categories) ? categories.map(c => ({ id: String(c.id), name: c.name })) : [],
+          tags: Array.isArray(tags) ? tags.map(t => ({ id: String(t.id), name: t.name })) : [],
+        };
+      } catch (e) {
+        console.error("Failed to fetch taxonomies", e);
+        return { categories: [], tags: [] };
+      }
+    }),
   publishToWordpress: protectedProcedure
     .input(
       z.object({
@@ -1941,16 +2003,24 @@ export const documentsRouter = createTRPCRouter({
         authType?: string;
         username?: string;
         applicationPassword?: string;
+        accessToken?: string;
       };
 
-      if (credential.authType !== "application_password") {
+      if (credential.authType !== "application_password" && credential.authType !== "oauth") {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "当前仅支持 Application Password 方式发布",
+          message: "不支持的认证方式",
         });
       }
 
-      if (!credential.username || !credential.applicationPassword) {
+      let authHeader = "";
+      if (credential.authType === "oauth" && credential.accessToken) {
+         authHeader = `Bearer ${credential.accessToken}`;
+      } else if (credential.username && credential.applicationPassword) {
+         const authString = `${credential.username}:${credential.applicationPassword}`;
+         const basic = Buffer.from(authString, "utf8").toString("base64");
+         authHeader = `Basic ${basic}`;
+      } else {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "WordPress 凭证不完整",
@@ -1961,8 +2031,6 @@ export const documentsRouter = createTRPCRouter({
         return uploadMediaToWordpress(site, imageUrl);
       });
       const siteUrl = normalizeSiteUrl(site.siteUrl);
-      const authString = `${credential.username}:${credential.applicationPassword}`;
-      const basic = Buffer.from(authString, "utf8").toString("base64");
 
       const options = input.options ?? {};
       const status = options.status ?? "draft";
@@ -1999,7 +2067,7 @@ export const documentsRouter = createTRPCRouter({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Basic ${basic}`,
+            Authorization: authHeader,
           },
           body: JSON.stringify(body),
         });

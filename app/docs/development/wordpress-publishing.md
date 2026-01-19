@@ -1,280 +1,173 @@
-## WordPress 快速发布与自动建站能力设计
+## WordPress 发布集成与自动建站能力设计
 
 ### 1. 功能概述
 
-目标：在文档编辑完成后，提供「一键发布到外部站点」能力，第一期支持 WordPress。
+目标：在文档编辑完成后，提供「一键发布到外部站点」能力，第一期优先支持连接用户已有的 WordPress 站点。
 
-- 支持场景：
-  - 从当前文档内容生成文章（标题 + 正文），发布到指定 WordPress 站点
-  - 支持选择发布状态（草稿 / 已发布）
-  - 支持绑定多个 WordPress 站点并复用
-- 不支持 / 注意事项：
-  - **不能**仅凭「用户输入任意 WordPress 网站 URL」就“自动建站”
-    - WordPress REST API 只能操作**已有**站点
-    - 真正的“自动建站”需要对应云服务（如 WordPress.com、托管服务商）提供**站点创建 API**，本项目可以预留集成点，但无法对任意独立部署的 WordPress 做到自动建站
-  - 不做主题 / 插件层面的自动配置，只负责内容层面的创建文章
+- **核心场景**：
+  - 用户连接自己已有的 WordPress 站点（自托管或托管均可）。
+  - 从当前文档内容生成文章（标题 + 正文），发布到指定 WordPress 站点。
+  - 支持选择发布状态（草稿 / 已发布）。
+  - 支持绑定多个 WordPress 站点并复用。
+
+- **关于“自动建站”**：
+  - 第一期主要聚焦于**连接已有站点**。
+  - “自动建站”（即通过 API 创建全新的 WordPress 实例）仅在特定云服务商（如 WordPress.com）提供支持时作为扩展功能，不作为核心路径。
 
 后续扩展方向：
-
-- 支持更多平台（Notion、Ghost、Hashnode、知乎草稿等）
-- 支持批量发布 / 定时发布
-- 支持将回链（canonical URL）写回当前文档 metadata
-
----
-
-### 2. 能力与限制：关于「自动建站」
-
-#### 2.1 能不能通过 WordPress 接口自动建站？
-
-通用结论：**直接对用户填写的 wordpress 网站 URL，通常做不到自动建站**，原因：
-
-- 常见自建站点（宝塔 / VPS 上装的 WordPress）：
-  - WordPress 核心只内置内容管理 API（Posts、Pages、Users 等）
-  - 站点本身是通过安装向导 + 数据库配置完成的，没有公开的「创建新站点」REST API
-- WordPress.com 或托管服务：
-  - 少数平台提供站点创建 API，但都是**平台级 OAuth + 自己的 API 规范**
-  - 需要单独协议、申请 client id / secret，本项目可以接入，但属于**特定平台适配**
-
-因此，本设计中的“自动建站”定义为：
-
-- 在**已存在的 WordPress 账户 / 站点体系**之上，调用平台 API 帮用户创建新的「站点实例」；
-- 需要针对不同平台开发独立的 Provider，例如：
-  - `WordPressDotComProvider`
-  - 某云厂商的「WordPress 一键部署」API Provider
-
-第一期只做**「对已有 WordPress 站点自动发文」**，在接口设计中预留 `provider` / `siteId` 等字段，为后续自动建站扩展留坑。
+- 支持更多平台（Notion、Ghost、Hashnode、知乎草稿等）。
+- 支持批量发布 / 定时发布。
+- 支持将回链（canonical URL）写回当前文档 metadata。
 
 ---
 
-### 3. 路由与模块规划
+### 2. 连接方案设计
 
-#### 3.1 前端路由（App Router）
+为了兼顾自托管站点和托管平台（如 WordPress.com），采用两种集成方案。
 
-新建页面路由示例（仅规划，不一定全部实现）：
+#### 方案一：Application Passwords + WP REST API（推荐，通用性最强）
 
-- `/publish`：发布中心总览（列出已绑定的站点、发布历史）
-- `/publish/wordpress`：WordPress 发布配置与测试页面
-- 文档编辑页内使用**侧边栏 / 弹窗组件**（而不是单独路由）：
-  - 在 `/documents/[id]` 页内增加「发布」按钮
-  - 打开 `PublishToWordpressDialog` 组件完成配置与发布
+适用于所有支持 Application Passwords 的 WordPress 站点（WordPress 5.6+ 内置支持）。这是目前最通用、且符合官方推荐的安全集成方式。
+
+**流程概览：**
+1. 用户在自己的 WordPress 后台生成一个 **Application Password**。
+2. 用户在本应用中输入：
+   - **站点地址**（如 `https://example.com`）
+   - **用户名**
+   - **Application Password**
+3. 本应用后端验证凭据有效性，并加密存储。
+4. 后续发布时，后端代理请求，使用 HTTP Basic Auth 调用 WP REST API。
+
+**优点**：
+- 无需在 WordPress 安装特定插件（核心功能内置）。
+- 适用于绝大多数自托管站点。
+- 相比 OAuth2 Server 插件配置更简单。
+
+#### 方案二：WordPress.com OAuth 2.0（可选，针对托管站点）
+
+适用于 WordPress.com 托管站点或启用了 Jetpack 的自托管站点。
+
+**流程概览：**
+1. 用户点击“连接 WordPress.com”。
+2. 跳转到 WordPress.com 授权页面。
+3. 用户授权后，本应用获取 `accessToken`。
+4. 本应用使用 Token 调用 WordPress.com API。
+
+**优点**：
+- 用户体验更流畅（无需手动复制粘贴密码）。
+- 统一的 Token 管理。
+
+---
+
+### 3. 安全架构设计（关键）
+
+Application Password 本质上具有用户账户的完整权限，**绝对严禁**明文暴露。必须严格遵循以下安全架构：
+
+#### 3.1 核心原则
+1. **前端不持久化凭据**：前端只负责收集用户输入，通过 HTTPS 传输给后端，绝不保存在 LocalStorage/SessionStorage 中。
+2. **后端代理所有请求**：前端不直接调用用户 WordPress 站点 API，所有操作通过本应用后端中转。
+3. **加密存储**：后端数据库中存储的凭据必须经过高强度加密（AES-256-GCM 或 KMS）。
+
+#### 3.2 数据流向与安全措施
+
+| 阶段 | 动作 | 安全措施 |
+| :--- | :--- | :--- |
+| **连接时** | 用户输入 URL/用户/密码 | 全程 HTTPS 传输；前端不缓存。 |
+| **验证时** | 后端尝试调用 `/wp-json/wp/v2/users/me` | 验证凭据有效性；验证成功后立即加密。 |
+| **存储时** | 存入 `wordpress_sites` 表 | 仅存储加密后的密文（`encrypted_credential`），密钥由服务端安全管理。 |
+| **使用时** | 用户发起发布请求 | 前端仅传递 `siteId`；后端解密凭据，构造 Basic Auth Header，代理发送请求。 |
+| **断开时** | 用户删除绑定 | 后端彻底删除数据库中的凭据记录。 |
+
+---
+
+### 4. 路由与模块规划
+
+#### 4.1 前端路由（App Router）
+
+- 文档编辑页内使用**侧边栏 / 弹窗组件**：
+  - 在 `/documents/[id]` 页内增加「发布」按钮。
+  - 打开 `PublishToWordpressDialog` 组件完成配置与发布。
 
 组件规划（位于 `modules/documents/ui/components/`）：
-
-- `PublishButton`：文档页面右上角 / 工具栏上的「发布」入口
+- `PublishButton`：入口。
 - `PublishToWordpressDialog`：
-  - 选择 / 新增 WordPress 站点
-  - 显示将要发布的标题 / 预览
-  - 提交后调用后端 API
+  - **站点管理 Tab**：列表展示已绑定站点，提供“添加站点”入口。
+  - **发布配置 Tab**：选择站点、设置标题、状态、分类。
 
-#### 3.2 后端 API / tRPC 规划
+#### 4.2 后端 API / tRPC 规划
 
-在 `modules/documents/server/procedures.ts` 中新增一个 Router 或 Procedure：
+在 `modules/documents/server/procedures.ts` 中新增：
 
-- `documentsRouter.publishToWordpress`（tRPC mutation）
-  - 输入：
-    - `documentId: string`
-    - `target`：`{ type: "wordpress"; siteId: string }`
-    - `options`：
-      - `status: "draft" | "publish"`
-      - `slug?: string`
-      - `categories?: string[]`
-      - `tags?: string[]`
-  - 输出：
-    - `remotePostId: string`
-    - `remoteUrl?: string`
-    - `status: "success" | "partial" | "failed"`
-
-后续可以做一个通用的 `publishRouter`，把 WordPress / 其他平台抽象成 Provider。
+- `documentsRouter.connectWordpress` (Mutation)
+  - 输入：`{ siteUrl, username, applicationPassword }` 或 OAuth Code。
+  - 逻辑：验证连接 -> 加密凭据 -> 存入数据库。
+- `documentsRouter.publishToWordpress` (Mutation)
+  - 输入：`{ documentId, siteId, options: { status, slug, categories... } }`
+  - 逻辑：校验权限 -> 读取文档 -> 转换 HTML -> 解密凭据 -> 调用 WP API -> 返回结果。
 
 ---
 
-### 4. WordPress 集成设计
+### 5. 数据库模型设计
 
-#### 4.1 与 WordPress 的通信方式
+新增 `wordpress_sites` 表：
 
-优先采用 **WordPress REST API + Application Password / Token**：
+```prisma
+model WordpressSite {
+  id          String   @id @default(uuid())
+  ownerId     String   // 关联用户或工作区
+  
+  // 站点基本信息
+  siteUrl     String
+  name        String?  // 用户自定义名称或自动获取的站点标题
+  
+  // 认证信息
+  authType    String   // "application_password" | "oauth"
+  username    String?  // OAuth 模式下可能为空
+  
+  // 敏感凭据（加密存储）
+  // 存储结构示例：JSON.stringify({ iv: "...", content: "...", authTag: "..." })
+  credential  String   @db.Text 
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-- 典型 URL：
-  - `https://example.com/wp-json/wp/v2/posts`
-- 身份验证方式（可配置多种）：
-  1. **Application Password（推荐，自托管站点）**
-     - WordPress 5.6+ 内置
-     - 用户在 WordPress 后台生成「应用密码」，在本系统中录入：
-       - `siteUrl`: `https://example.com`
-       - `username`: `editor_user`
-       - `applicationPassword`: `xxxx xxxx xxxx xxxx`
-     - 在后端请求时使用 Basic Auth：`Authorization: Basic base64(username:applicationPassword)`
-  2. **JWT Authentication 插件**
-     - 需要站点安装 JWT 插件
-     - 登录获取 `accessToken`，后续用 `Authorization: Bearer <token>`
-  3. **WordPress.com / 其他托管平台**
-     - 独立的 OAuth 流程，后续扩展
-
-由于安全原因：
-
-- 不在前端直接调用 WordPress API
-- 不在浏览器保存明文密码 / token（统一存在后端数据库，使用加密列或 KMS）
-
-#### 4.2 站点配置模型
-
-新增数据表（仅设计）：
-
-- `wordpress_sites`
-  - `id` (uuid)
-  - `ownerId` (用户 id / workspace id)
-  - `siteUrl` (string)
-  - `displayName` (string)
-  - `authType` (`"application_password" | "jwt" | "wordpress_com" | ...`)
-  - `username` (string, 可选)
-  - `credential` (加密存储的 JSON，包含 application password / token 等)
-  - `createdAt`, `updatedAt`
-
-后端通过 ownerId + siteId 校验权限，防止越权使用他人配置。
-
-#### 4.3 发布流程
-
-1. 前端在文档页内点击「发布到 WordPress」
-2. 打开 `PublishToWordpressDialog`：
-   - 从后端拉取当前用户可用的 `wordpress_sites` 列表
-   - 选择站点 + 发布选项（状态 / 分类 / 标签）
-3. 调用 tRPC `documents.publishToWordpress`：
-   - 服务端根据 `documentId` 读取文档内容（blocks + title）
-   - 通过已有的 Block → HTML/Markdown 转换函数生成 `content`
-4. 服务端构造 WordPress REST 请求：
-
-   ```ts
-   POST {siteUrl}/wp-json/wp/v2/posts
-   Authorization: Basic ...
-
-   {
-     title: "...",
-     content: "<p>...</p>",
-     status: "draft" | "publish",
-     slug: "...",
-     categories: [...],
-     tags: [...]
-   }
-   ```
-
-5. 保存发布结果：
-   - 成功：返回 `remotePostId`、`link`，并可将这些信息写入当前文档 metadata：
-     - `metadata.externalPosts.wordpress = [{ siteId, postId, url, status }]`
-   - 失败：记录错误详情（`errorCode`, `errorMessage`, `requestId`），用于问题排查
-
----
-
-### 5. 与现有文档系统的集成
-
-#### 5.1 内容抽取与格式转换
-
-内容来源：当前文档的 Blocks（已在 `DocumentEditor` / `blocks` 模块中定义）。
-
-- 标题：使用文档标题 `document.title`
-- 正文生成策略：
-  - 遍历 Blocks，按 `position` 排序
-  - 将不同类型 Block 映射为 HTML：
-    - `heading_1/2/3` → `<h1> / <h2> / <h3>`
-    - `paragraph` → `<p>`
-    - `list` → `<ul><li>...</li></ul>`
-    - `todo` → `<ul class="todo-list">...`
-    - `code` → `<pre><code class="language-xxx">...</code></pre>`
-    - 其他暂时按 `<p>` 处理或忽略
-- 转换函数建议单独抽象到 `modules/documents/server/export.ts`：
-  - `exportDocumentToHtml(documentId: string): Promise<{ title: string; html: string }>`
-
-这样除了 WordPress，将来其他平台（如静态网站导出）也能复用。
-
-#### 5.2 权限校验
-
-调用 `publishToWordpress` 时需要：
-
-- 调用者对 `documentId` 拥有「编辑权限」或更高（沿用 `canEditDocumentFromAccess`）
-- 调用者对 `siteId` 拥有使用权限（`wordpress_sites.ownerId === ctx.user.id`）
-
----
-
-### 6. 自动建站扩展设计（预留）
-
-虽然第一期不做，但为未来的“自动建站”预留接口：
-
-#### 6.1 抽象 Provider 接口
-
-```ts
-interface SiteProvisionProvider {
-  createSite(params: {
-    ownerId: string;
-    plan?: string;
-    template?: string;
-  }): Promise<{
-    siteId: string;
-    siteUrl: string;
-    adminUrl?: string;
-  }>;
+  @@index([ownerId])
 }
 ```
 
-针对不同平台实现不同 Provider，例如：
+---
 
-- `WordPressComProvisionProvider`
-- `SomeCloudWordPressProvisionProvider`
+### 6. 发布流程详解
 
-#### 6.2 流程示意
-
-1. 用户在本系统内选择「使用 WordPress.com 自动创建站点」
-2. 跳转到 WordPress.com OAuth 授权并返回 `accessToken`
-3. 调用 WordPress.com 的站点创建 API：
-   - 传入站点名称、域名（子域）、计划等
-4. 成功后在本系统中：
-   - 记录 `wordpress_sites`（站点 URL + 凭证）
-   - 可立即调用「发布到 WordPress」流程发布当前文档
-
-> 注意：这部分完全取决于目标托管平台是否提供公开 API，本项目只能在有能力的前提下集成。
+1. **前端发起**：
+   用户在编辑器点击发布，选择站点 `site-123`，填写标题 "My Post"。
+2. **后端处理 (`publishToWordpress`)**：
+   - 检查用户是否拥有 `site-123` 的使用权。
+   - 从数据库取出 `credential`，使用服务器密钥解密出 `applicationPassword`。
+   - 将文档 Blocks 转换为 HTML。
+   - 构造目标 URL：`{siteUrl}/wp-json/wp/v2/posts`。
+   - 构造 Header：`Authorization: Basic base64(username:password)`。
+   - 发送 POST 请求。
+3. **结果处理**：
+   - 成功：返回文章链接，记录发布历史。
+   - 失败：返回错误码（如 401 Auth Failed, 403 Forbidden），提示用户检查凭据或权限。
 
 ---
 
-### 7. 前端交互草图
+### 7. 开发任务拆解
 
-**文档编辑页右上角按钮：**
+1. **后端基础设施**
+   - 实现加密/解密工具函数（`lib/crypto.ts`）。
+   - 创建 `wordpress_sites` 数据表 (Prisma Schema)。
+   - 实现 `connectWordpress` procedure (含验证逻辑)。
 
-- 「保存」右侧新增 `发布` 下拉按钮：
-  - 点击主按钮：默认发布到最近一次使用的站点
-  - 点击下拉：选择「发布到 WordPress」「发布到其他平台」
+2. **文档转换引擎**
+   - 实现 `exportDocumentToHtml`：将 Block 结构转为符合 WordPress 要求的 HTML。
 
-**发布弹窗字段：**
+3. **前端 UI**
+   - `ConnectWordpressDialog`：表单输入 URL、用户名、密码。
+   - `PublishDialog`：选择站点、配置发布参数。
 
-- 站点选择：`select`（从 `wordpress_sites` 获取）
-- 标题（可编辑，默认使用文档标题）
-- 发布状态：`草稿 / 立即发布`
-- 分类 / 标签（可选）
-- 预览区：简要展示转换后的 HTML（或 Markdown）
-
----
-
-### 8. 安全与合规
-
-- 所有与 WordPress 交互都在后端完成，避免暴露凭证
-- 站点凭证存储：
-  - 使用数据库加密列或者在应用层进行加密
-  - 不在日志中打印完整的 URL + 带凭证的 header
-- 失败重试：
-  - tRPC 层返回明确错误码（如 `WORDPRESS_AUTH_FAILED`, `WORDPRESS_VALIDATION_ERROR`）
-  - 前端 toast 提示友好信息，并在开发模式下打印详细错误
-
----
-
-### 9. 开发拆分建议
-
-1. 后端基础设施
-   - 抽象 WordPress HTTP client（支持 Application Password）
-   - 添加 `wordpress_sites` 数据模型与 CRUD API（内部用）
-2. 文档导出能力
-   - 实现 `exportDocumentToHtml`，基于现有 Blocks
-3. `publishToWordpress` tRPC 实现
-   - 权限校验、调用 WordPress API、错误处理
-4. 前端 UI
-   - 文档页发布按钮 + 弹窗
-   - 简单发布历史（可后置）
-5. 自动建站 Provider 预研
-   - 调研目标托管平台是否提供站点创建 API
-   - 设计 Provider 接口与配置结构
-
+4. **集成测试**
+   - 使用本地 WordPress 或测试站点验证 Application Password 流程。
+   - 验证加密存储的安全性（数据库中无明文）。

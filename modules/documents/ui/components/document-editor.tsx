@@ -717,7 +717,14 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const [selectedWordpressSiteId, setSelectedWordpressSiteId] = useState("");
   const [publishStatus, setPublishStatus] = useState<"draft" | "publish">("draft");
   const [publishSlug, setPublishSlug] = useState("");
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [publishError, setPublishError] = useState<string | null>(null);
+
+  const { data: wordpressTaxonomies, isLoading: isLoadingTaxonomies } = trpc.documents.getWordpressTaxonomies.useQuery(
+    { siteId: selectedWordpressSiteId },
+    { enabled: !!selectedWordpressSiteId }
+  );
 
   const handleBlockCreate = useCallback(
     async (blockData: Omit<Block, "id" | "createdAt" | "updatedAt">) => {
@@ -2440,6 +2447,77 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
                 className="mt-1"
               />
             </div>
+            
+            <div>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 block">
+                分类（可选）
+              </label>
+              {isLoadingTaxonomies ? (
+                 <div className="text-sm text-slate-500">加载分类中...</div>
+              ) : wordpressTaxonomies?.categories?.length ? (
+                <div className="border rounded-md p-2 max-h-32 overflow-y-auto space-y-2 bg-white dark:bg-slate-900">
+                  {wordpressTaxonomies.categories.map(cat => (
+                    <div key={cat.id} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id={`cat-${cat.id}`}
+                        checked={selectedCategories.includes(cat.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedCategories(prev => [...prev, cat.id]);
+                          } else {
+                            setSelectedCategories(prev => prev.filter(id => id !== cat.id));
+                          }
+                        }}
+                        className="rounded border-slate-300"
+                        disabled={isPublishing}
+                      />
+                      <label htmlFor={`cat-${cat.id}`} className="text-sm cursor-pointer select-none flex-1">
+                        {cat.name}
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-slate-500">无可用分类</div>
+              )}
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 block">
+                标签（可选）
+              </label>
+              {isLoadingTaxonomies ? (
+                 <div className="text-sm text-slate-500">加载标签中...</div>
+              ) : wordpressTaxonomies?.tags?.length ? (
+                <div className="border rounded-md p-2 max-h-32 overflow-y-auto space-y-2 bg-white dark:bg-slate-900">
+                  {wordpressTaxonomies.tags.map(tag => (
+                    <div key={tag.id} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id={`tag-${tag.id}`}
+                        checked={selectedTags.includes(tag.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedTags(prev => [...prev, tag.id]);
+                          } else {
+                            setSelectedTags(prev => prev.filter(id => id !== tag.id));
+                          }
+                        }}
+                        className="rounded border-slate-300"
+                        disabled={isPublishing}
+                      />
+                      <label htmlFor={`tag-${tag.id}`} className="text-sm cursor-pointer select-none flex-1">
+                        {tag.name}
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-slate-500">无可用标签</div>
+              )}
+            </div>
+
             {publishError && (
               <p className="text-sm text-red-600 dark:text-red-400">
                 {publishError}
@@ -2481,6 +2559,8 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
                     options: {
                       status: publishStatus,
                       slug: publishSlug || undefined,
+                      categories: selectedCategories,
+                      tags: selectedTags,
                     },
                   });
                   if (result.status === "success") {

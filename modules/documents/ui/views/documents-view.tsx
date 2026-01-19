@@ -7,6 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Loader2, FileText, Plus, FolderPlus, MoreHorizontal, ChevronsDown } from "lucide-react";
 
 export const DocumentsView = () => {
@@ -103,6 +109,8 @@ export const DocumentsView = () => {
       window.location.href = `/documents/${newDocument.id}`;
     },
   });
+
+  const updateDocumentMutation = trpc.documents.updateDocument.useMutation();
 
   const createWorkspaceMutation = trpc.workspaces.createWorkspace.useMutation({
     onMutate: async (input) => {
@@ -333,12 +341,37 @@ export const DocumentsView = () => {
             </DialogContent>
           </Dialog>
 
-          <Dialog open={isBindWordpressOpen} onOpenChange={setIsBindWordpressOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline">
-                绑定 WordPress 站点
+          <Button
+            onClick={handleOpenCreateDocumentDialog}
+            disabled={createDocumentMutation.isPending}
+            className="flex items-center gap-2"
+          >
+            {createDocumentMutation.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Plus className="size-4" />
+            )}
+            新建文档
+          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="flex items-center gap-2">
+                更多
+                <MoreHorizontal className="size-4" />
               </Button>
-            </DialogTrigger>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => setIsBindWordpressOpen(true)}>
+                绑定 WordPress 站点
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setIsInviteOpen(true)}>
+                邀请成员
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Dialog open={isBindWordpressOpen} onOpenChange={setIsBindWordpressOpen}>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
                 <DialogTitle>绑定 WordPress 站点</DialogTitle>
@@ -347,6 +380,34 @@ export const DocumentsView = () => {
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
+                <div className="flex flex-col gap-2 p-4 bg-slate-50 dark:bg-slate-900 rounded-md border border-slate-200 dark:border-slate-800">
+                  <h3 className="text-sm font-medium">推荐方式</h3>
+                  <Button
+                    type="button"
+                    variant="default"
+                    className="w-full bg-[#0087be] hover:bg-[#0073aa] text-white"
+                    onClick={() => {
+                      window.location.href = "/api/oauth/wordpress/connect";
+                    }}
+                  >
+                    连接 WordPress.com
+                  </Button>
+                  <p className="text-xs text-slate-500">
+                    支持 WordPress.com 托管的站点。
+                  </p>
+                </div>
+
+                <div className="relative my-2">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-slate-200 dark:border-slate-700" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white dark:bg-slate-950 px-2 text-slate-500">
+                      或者手动配置 (Self-hosted)
+                    </span>
+                  </div>
+                </div>
+
                 <div>
                   <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
                     站点地址
@@ -450,22 +511,7 @@ export const DocumentsView = () => {
             </DialogContent>
           </Dialog>
 
-          <Button
-            onClick={handleOpenCreateDocumentDialog}
-            disabled={createDocumentMutation.isPending}
-            className="flex items-center gap-2"
-          >
-            {createDocumentMutation.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Plus className="size-4" />
-            )}
-            新建文档
-          </Button>
           <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline">邀请成员</Button>
-            </DialogTrigger>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
                 <DialogTitle>邀请用户到工作区</DialogTitle>
@@ -930,7 +976,7 @@ export const DocumentsView = () => {
               onClick={async () => {
                 if (!moveDocumentId || !moveTargetWorkspaceId) return;
                 try {
-                  await trpc.documents.updateDocument.mutateAsync({
+                  await updateDocumentMutation.mutateAsync({
                     id: moveDocumentId,
                     data: { workspaceId: moveTargetWorkspaceId },
                   } as never);

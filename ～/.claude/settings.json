@@ -1,0 +1,6 @@
+{
+  "env": {
+    "ANTHROPIC_API_KEY": "sk-zBi4mS2tY0niebHQd4SnQYgpKK3KQ1DvxuoBu8Bs92kyfY4J",
+    "ANTHROPIC_BASE_URL": "https://api.code-relay.com/"
+  }
+}
