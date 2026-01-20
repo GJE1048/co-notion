@@ -2,7 +2,7 @@ import { z } from "zod";
 import { protectedProcedure, createTRPCRouter } from "@/trpc/init";
 import { db } from "@/db";
 import { documents, blocks, workspaces, operations, users, documentCollaborators, workspaceMembers, wordpressSites } from "@/db/schema";
-import { eq, and, desc, asc, sql, gt, or, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, sql, gt, or, inArray, SQL } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { notifyDocumentUpdated } from "@/realtime/notify";
 import { ensurePersonalWorkspace } from "@/lib/workspace";
@@ -148,7 +148,7 @@ type WordpressValidationResult = {
 };
 
 const normalizeSiteUrl = (siteUrl: string) => {
-  return siteUrl.replace(/\/+$/, "");
+  return siteUrl.trim().replace(/\/+$/, "");
 };
 
 const validateWordpressCredentials = async (input: WordpressAuthInput): Promise<WordpressValidationResult> => {
@@ -1244,13 +1244,15 @@ export const documentsRouter = createTRPCRouter({
         eq(operations.documentId, input.documentId),
         input.sinceVersion > 0
           ? gt(operations.version, input.sinceVersion)
-          : sql`TRUE`,
+          : undefined,
       ];
+
+      const validConditions = conditions.filter((c): c is SQL => c !== undefined);
 
       const ops = await db
         .select()
         .from(operations)
-        .where(and(...conditions))
+        .where(and(...validConditions))
         .orderBy(asc(operations.version))
         .limit(input.limit);
 
@@ -1914,6 +1916,31 @@ export const documentsRouter = createTRPCRouter({
 
       if (credential.authType === "oauth" && credential.accessToken) {
         headers = { Authorization: `Bearer ${credential.accessToken}` };
+        
+        // Ensure blogId is present (similar logic to publishToWordpress)
+        if (!credential.blogId) {
+             try {
+               const sitesRes = await fetch("https://public-api.wordpress.com/rest/v1.1/me/sites", {
+                 headers
+               });
+               if (sitesRes.ok) {
+                 const sitesData = await sitesRes.json() as { sites: { ID: number; URL: string }[] };
+                 if (sitesData.sites && sitesData.sites.length > 0) {
+                   const matchedSite = sitesData.sites.find(s => normalizeSiteUrl(s.URL) === normalizeSiteUrl(site.siteUrl)) || sitesData.sites[0];
+                   if (matchedSite) {
+                     credential.blogId = matchedSite.ID;
+                     // Update DB
+                     await db.update(wordpressSites).set({
+                       credential: { ...credential, blogId: matchedSite.ID }
+                     }).where(eq(wordpressSites.id, site.id));
+                   }
+                 }
+               }
+             } catch (e) {
+               console.error("Failed to fetch sites for OAuth user in taxonomies", e);
+             }
+        }
+
         if (credential.blogId) {
           apiBaseUrl = `https://public-api.wordpress.com/wp/v2/sites/${credential.blogId}`;
         }
@@ -2033,9 +2060,57 @@ export const documentsRouter = createTRPCRouter({
 
       if (credential.authType === "oauth" && credential.accessToken) {
          authHeader = `Bearer ${credential.accessToken}`;
+         
+         // If blogId is missing, try to fetch it from WordPress.com
+         if (!credential.blogId) {
+             console.log("[Publish] blogId missing, attempting to fetch...");
+             let debugMsg = "";
+             try {
+               const sitesRes = await fetch("https://public-api.wordpress.com/rest/v1.1/me/sites", {
+                 headers: { Authorization: authHeader }
+               });
+               if (sitesRes.ok) {
+                 const sitesData = await sitesRes.json() as { sites: { ID: number; URL: string }[] };
+                 console.log("[Publish] Fetched sites:", JSON.stringify(sitesData));
+                 if (sitesData.sites && sitesData.sites.length > 0) {
+                   // Try to match by URL if possible, otherwise pick the first one
+                   const matchedSite = sitesData.sites.find(s => normalizeSiteUrl(s.URL) === normalizeSiteUrl(site.siteUrl)) || sitesData.sites[0];
+                   if (matchedSite) {
+                     console.log("[Publish] Matched site:", matchedSite);
+                     credential.blogId = matchedSite.ID;
+                     // Update the DB to save this blogId for future use
+                     await db.update(wordpressSites).set({
+                       credential: { ...credential, blogId: matchedSite.ID }
+                     }).where(eq(wordpressSites.id, site.id));
+                   } else {
+                      debugMsg = "No matching site found in user's site list.";
+                   }
+                 } else {
+                    debugMsg = "User has no sites.";
+                 }
+               } else {
+                  const errText = await sitesRes.text();
+                  debugMsg = `Fetch sites failed: ${sitesRes.status} ${errText}`;
+                  console.error(debugMsg);
+               }
+             } catch (e) {
+               debugMsg = `Fetch sites exception: ${e instanceof Error ? e.message : String(e)}`;
+               console.error("Failed to fetch sites for OAuth user", e);
+             }
+             
+             if (!credential.blogId) {
+                 console.error("[Publish] Still no blogId after fetch attempt:", debugMsg);
+                 throw new TRPCError({
+                    code: "BAD_REQUEST",
+                    message: `无法自动获取 WordPress 站点 ID (blogId)。原因: ${debugMsg || "未知错误"}。请检查您的 WordPress.com 账号下是否有可用站点。`,
+                 });
+             }
+         }
+
          if (credential.blogId) {
             apiBaseUrl = `https://public-api.wordpress.com/wp/v2/sites/${credential.blogId}`;
          }
+         console.log("[Publish] Using apiBaseUrl:", apiBaseUrl, "blogId:", credential.blogId);
       } else if (credential.username && (credential.applicationPassword || credential.encryptedPassword)) {
          const password = credential.applicationPassword || decrypt(credential.encryptedPassword!);
          const authString = `${credential.username}:${password}`;
