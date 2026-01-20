@@ -2034,6 +2034,10 @@ export const documentsRouter = createTRPCRouter({
             categories: z.array(z.string()).optional(),
             tags: z.array(z.string()).optional(),
             title: z.string().optional(),
+            jetpackSocialOptions: z.object({
+              enabled: z.boolean(),
+              message: z.string().optional(),
+            }).optional(),
           })
           .optional(),
       })
@@ -2204,6 +2208,19 @@ export const documentsRouter = createTRPCRouter({
 
         if (input.options?.tags?.length) {
           body.tags = input.options.tags;
+        }
+      }
+
+      if (input.options?.jetpackSocialOptions?.enabled) {
+        // If enabled, send the custom message. If message is empty, it might fall back to title or default.
+        // We set it if provided.
+        if (input.options.jetpackSocialOptions.message) {
+           body.jetpack_publicize_message = input.options.jetpackSocialOptions.message;
+        } else {
+           // If enabled but no message, we can default to title or just set it to empty string to trigger default?
+           // Actually, if we just want to ENABLE it, often we don't need to do anything if it's default on.
+           // But if we want to ensure the message is the title:
+           body.jetpack_publicize_message = input.options.title ?? exported.title;
         }
       }
 

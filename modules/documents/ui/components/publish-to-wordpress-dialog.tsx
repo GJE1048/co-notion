@@ -50,6 +50,9 @@ function PublishForm({ documentId, documentTitle }: { documentId: string, docume
   
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  
+  const [jetpackEnabled, setJetpackEnabled] = useState(false);
+  const [jetpackMessage, setJetpackMessage] = useState("");
 
   const { data: sites, isLoading: isLoadingSites } = trpc.documents.getWordpressSites.useQuery();
   
@@ -90,6 +93,10 @@ function PublishForm({ documentId, documentTitle }: { documentId: string, docume
         categories: postType === 'post' ? selectedCategories : undefined,
         tags: postType === 'post' ? selectedTags : undefined,
         title: title !== documentTitle ? title : undefined,
+        jetpackSocialOptions: {
+          enabled: jetpackEnabled,
+          message: jetpackMessage || undefined,
+        },
       },
     });
   };
@@ -270,6 +277,41 @@ function PublishForm({ documentId, documentTitle }: { documentId: string, docume
                 </div>
               ) : (
                 <div className="text-sm text-muted-foreground">无可用标签</div>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 items-start gap-4 pt-4 border-t mt-2">
+            <label className="text-right text-sm font-medium pt-0.5">
+              社交分发
+            </label>
+            <div className="col-span-3 space-y-3">
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="jetpack-enabled"
+                  checked={jetpackEnabled}
+                  onChange={(e) => setJetpackEnabled(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                />
+                <label htmlFor="jetpack-enabled" className="text-sm cursor-pointer select-none">
+                  同步到 Jetpack Social
+                </label>
+              </div>
+              
+              {jetpackEnabled && (
+                <div className="space-y-1.5">
+                  <label htmlFor="jetpack-message" className="text-xs text-muted-foreground block">
+                    自定义分享语 (默认为标题)
+                  </label>
+                  <Input
+                    id="jetpack-message"
+                    value={jetpackMessage}
+                    onChange={(e) => setJetpackMessage(e.target.value)}
+                    placeholder="输入分享消息..."
+                    className="h-8 text-sm"
+                  />
+                </div>
               )}
             </div>
           </div>
