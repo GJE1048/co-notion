@@ -182,6 +182,20 @@ export const integrationAccounts = pgTable("integration_accounts", {
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+export const aiShorthandRecords = pgTable("ai_shorthand_records", {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
+    title: text("title").notNull(),
+    date: timestamp("date").notNull(),
+    duration: integer("duration").notNull().default(0),
+    status: text("status", { enum: ['recording', 'processing', 'completed'] }).notNull().default('recording'),
+    transcript: text("transcript"),
+    summary: text("summary"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 // 关系定义
 export const usersRelations = relations(users, ({ many }) => ({
     documents: many(documents),
@@ -192,6 +206,11 @@ export const usersRelations = relations(users, ({ many }) => ({
     operations: many(operations),
     documentTags: many(documentTags),
     integrationAccounts: many(integrationAccounts),
+    aiShorthandRecords: many(aiShorthandRecords),
+}));
+
+export const aiShorthandRecordsRelations = relations(aiShorthandRecords, ({ one }) => ({
+    user: one(users, { fields: [aiShorthandRecords.userId], references: [users.id] }),
 }));
 
 export const workspacesRelations = relations(workspaces, ({ one, many }) => ({
