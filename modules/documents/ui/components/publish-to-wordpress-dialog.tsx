@@ -44,6 +44,7 @@ function PublishForm({ documentId, documentTitle }: { documentId: string, docume
   const [title, setTitle] = useState(documentTitle);
   const [slug, setSlug] = useState("");
   const [status, setStatus] = useState<"draft" | "publish">("draft");
+  const [postType, setPostType] = useState<"post" | "page">("post");
   const [publishResult, setPublishResult] = useState<string | null>(null);
   const [isConnectDialogOpen, setIsConnectDialogOpen] = useState(false);
   
@@ -84,30 +85,13 @@ function PublishForm({ documentId, documentTitle }: { documentId: string, docume
       },
       options: {
         status,
+        type: postType,
         slug: slug || undefined,
-        categories: selectedCategories,
-        tags: selectedTags,
-        title: title !== documentTitle ? title : undefined, // Only send if changed, or always? The backend uses document title by default if not provided? 
-        // Actually the backend might expect title if we want to override it.
-        // Let's assume we pass it if we want to set a specific title for WP post.
-        // If the UI allows editing title, we should probably pass it.
+        categories: postType === 'post' ? selectedCategories : undefined,
+        tags: postType === 'post' ? selectedTags : undefined,
+        title: title !== documentTitle ? title : undefined,
       },
     });
-    // Note: The backend procedure might not accept 'title' in options if I didn't add it.
-    // Let's check if 'title' is in the input schema.
-    // I'll assume it is or I will add it if needed. 
-    // Wait, looking at previous context, I didn't explicitly see 'title' in options in my summary.
-    // Let's check if the previous implementation had it.
-    // The previous implementation had `title` state but didn't seem to pass it in `options` in `handlePublish` function in the file I read!
-    // Line 73-85 in original file:
-    // options: { status, slug: slug || undefined, categories, tags }
-    // It did NOT pass title.
-    // So the title input in the UI was useless? Or maybe it was intended to update the document title too?
-    // If the user changes the title here, it should probably be used for the post.
-    // I should check the backend procedure. 
-    // For now I will NOT pass it to avoid type error, but I will keep the UI.
-    // Or maybe I should add it to the backend.
-    // Let's stick to what was there: it wasn't passed. I'll comment it out or leave it out.
   };
 
   return (
@@ -185,8 +169,40 @@ function PublishForm({ documentId, documentTitle }: { documentId: string, docume
               <option value="publish">发布</option>
             </select>
           </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
+            <label className="text-right text-sm font-medium">
+              类型
+            </label>
+            <div className="col-span-3 flex gap-4">
+              <label className="flex items-center space-x-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="postType"
+                  value="post"
+                  checked={postType === "post"}
+                  onChange={(e) => setPostType(e.target.value as "post" | "page")}
+                  className="h-4 w-4 border-gray-300 text-primary focus:ring-primary"
+                />
+                <span className="text-sm">文章 (Post)</span>
+              </label>
+              <label className="flex items-center space-x-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="postType"
+                  value="page"
+                  checked={postType === "page"}
+                  onChange={(e) => setPostType(e.target.value as "post" | "page")}
+                  className="h-4 w-4 border-gray-300 text-primary focus:ring-primary"
+                />
+                <span className="text-sm">页面 (Page)</span>
+              </label>
+            </div>
+          </div>
           
-          <div className="grid grid-cols-4 items-start gap-4">
+          {postType === 'post' && (
+            <>
+              <div className="grid grid-cols-4 items-start gap-4">
             <label className="text-right text-sm font-medium pt-2">
               分类
             </label>
@@ -257,6 +273,8 @@ function PublishForm({ documentId, documentTitle }: { documentId: string, docume
               )}
             </div>
           </div>
+            </>
+          )}
         </>
       )}
 

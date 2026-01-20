@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { protectedProcedure, createTRPCRouter } from "@/trpc/init";
 import { db } from "@/db";
-import { documents, blocks, workspaces, operations, users, documentCollaborators, workspaceMembers, wordpressSites } from "@/db/schema";
+import { documents, blocks, workspaces, operations, users, documentCollaborators, workspaceMembers, integrationAccounts } from "@/db/schema";
 import { eq, and, desc, asc, sql, gt, or, inArray, SQL } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { notifyDocumentUpdated } from "@/realtime/notify";
@@ -209,11 +209,11 @@ const escapeHtml = (value: string) => {
 };
 
 const uploadMediaToWordpress = async (
-  site: typeof wordpressSites.$inferSelect,
+  site: typeof integrationAccounts.$inferSelect,
   imageUrl: string
 ): Promise<string | null> => {
-  const siteUrl = normalizeSiteUrl(site.siteUrl);
-  const credential = site.credential as {
+  const siteUrl = normalizeSiteUrl(site.siteUrl || "");
+  const credential = site.credentials as {
     authType?: string;
     username?: string;
     applicationPassword?: string;
@@ -1814,17 +1814,20 @@ export const documentsRouter = createTRPCRouter({
     .query(async ({ ctx }) => {
       const sites = await db
         .select({
-          id: wordpressSites.id,
-          siteUrl: wordpressSites.siteUrl,
-          displayName: wordpressSites.displayName,
-          authType: wordpressSites.authType,
-          username: wordpressSites.username,
-          createdAt: wordpressSites.createdAt,
-          updatedAt: wordpressSites.updatedAt,
+          id: integrationAccounts.id,
+          siteUrl: integrationAccounts.siteUrl,
+          displayName: integrationAccounts.displayName,
+          authType: integrationAccounts.authType,
+          username: integrationAccounts.identifier,
+          createdAt: integrationAccounts.createdAt,
+          updatedAt: integrationAccounts.updatedAt,
         })
-        .from(wordpressSites)
-        .where(eq(wordpressSites.ownerId, ctx.user.id))
-        .orderBy(desc(wordpressSites.createdAt));
+        .from(integrationAccounts)
+        .where(and(
+          eq(integrationAccounts.ownerId, ctx.user.id),
+          eq(integrationAccounts.platform, "wordpress")
+        ))
+        .orderBy(desc(integrationAccounts.createdAt));
 
       return sites;
     }),
@@ -1855,27 +1858,28 @@ export const documentsRouter = createTRPCRouter({
       const siteUrl = normalizeSiteUrl(input.siteUrl);
 
       const [site] = await db
-        .insert(wordpressSites)
+        .insert(integrationAccounts)
         .values({
           ownerId: ctx.user.id,
+          platform: "wordpress",
           siteUrl,
           displayName: input.displayName,
           authType: input.authType,
-          username: input.username,
-          credential: {
+          identifier: input.username,
+          credentials: {
             authType: input.authType,
             username: input.username,
             encryptedPassword: input.applicationPassword ? encrypt(input.applicationPassword) : undefined,
           },
         })
         .returning({
-          id: wordpressSites.id,
-          siteUrl: wordpressSites.siteUrl,
-          displayName: wordpressSites.displayName,
-          authType: wordpressSites.authType,
-          username: wordpressSites.username,
-          createdAt: wordpressSites.createdAt,
-          updatedAt: wordpressSites.updatedAt,
+          id: integrationAccounts.id,
+          siteUrl: integrationAccounts.siteUrl,
+          displayName: integrationAccounts.displayName,
+          authType: integrationAccounts.authType,
+          username: integrationAccounts.identifier,
+          createdAt: integrationAccounts.createdAt,
+          updatedAt: integrationAccounts.updatedAt,
         });
 
       return {
@@ -1891,8 +1895,12 @@ export const documentsRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const [site] = await db
         .select()
-        .from(wordpressSites)
-        .where(and(eq(wordpressSites.id, input.siteId), eq(wordpressSites.ownerId, ctx.user.id)));
+        .from(integrationAccounts)
+        .where(and(
+          eq(integrationAccounts.id, input.siteId),
+          eq(integrationAccounts.ownerId, ctx.user.id),
+          eq(integrationAccounts.platform, "wordpress")
+        ));
 
       if (!site) {
         throw new TRPCError({
@@ -1901,8 +1909,8 @@ export const documentsRouter = createTRPCRouter({
         });
       }
 
-      const siteUrl = normalizeSiteUrl(site.siteUrl);
-      const credential = site.credential as {
+      const siteUrl = normalizeSiteUrl(site.siteUrl || "");
+      const credential = site.credentials as {
         authType?: string;
         username?: string;
         applicationPassword?: string;
@@ -1926,13 +1934,13 @@ export const documentsRouter = createTRPCRouter({
                if (sitesRes.ok) {
                  const sitesData = await sitesRes.json() as { sites: { ID: number; URL: string }[] };
                  if (sitesData.sites && sitesData.sites.length > 0) {
-                   const matchedSite = sitesData.sites.find(s => normalizeSiteUrl(s.URL) === normalizeSiteUrl(site.siteUrl)) || sitesData.sites[0];
+                   const matchedSite = sitesData.sites.find(s => normalizeSiteUrl(s.URL) === normalizeSiteUrl(site.siteUrl || "")) || sitesData.sites[0];
                    if (matchedSite) {
                      credential.blogId = matchedSite.ID;
                      // Update DB
-                     await db.update(wordpressSites).set({
-                       credential: { ...credential, blogId: matchedSite.ID }
-                     }).where(eq(wordpressSites.id, site.id));
+                     await db.update(integrationAccounts).set({
+                       credentials: { ...credential, blogId: matchedSite.ID }
+                     }).where(eq(integrationAccounts.id, site.id));
                    }
                  }
                }
@@ -1974,8 +1982,12 @@ export const documentsRouter = createTRPCRouter({
   disconnectWordpressSite: protectedProcedure
     .input(z.object({ siteId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      await db.delete(wordpressSites)
-        .where(and(eq(wordpressSites.id, input.siteId), eq(wordpressSites.ownerId, ctx.user.id)));
+      await db.delete(integrationAccounts)
+        .where(and(
+          eq(integrationAccounts.id, input.siteId),
+          eq(integrationAccounts.ownerId, ctx.user.id),
+          eq(integrationAccounts.platform, "wordpress")
+        ));
       return { success: true };
     }),
   getSitePublishedPosts: protectedProcedure
@@ -2017,6 +2029,7 @@ export const documentsRouter = createTRPCRouter({
         options: z
           .object({
             status: z.enum(["draft", "publish"]).optional(),
+            type: z.enum(["post", "page"]).optional().default("post"),
             slug: z.string().optional(),
             categories: z.array(z.string()).optional(),
             tags: z.array(z.string()).optional(),
@@ -2063,8 +2076,12 @@ export const documentsRouter = createTRPCRouter({
 
       const [site] = await db
         .select()
-        .from(wordpressSites)
-        .where(and(eq(wordpressSites.id, input.target.siteId), eq(wordpressSites.ownerId, ctx.user.id)));
+        .from(integrationAccounts)
+        .where(and(
+          eq(integrationAccounts.id, input.target.siteId),
+          eq(integrationAccounts.ownerId, ctx.user.id),
+          eq(integrationAccounts.platform, "wordpress")
+        ));
 
       if (!site) {
         throw new TRPCError({
@@ -2073,7 +2090,7 @@ export const documentsRouter = createTRPCRouter({
         });
       }
 
-      const credential = site.credential as {
+      const credential = site.credentials as {
         authType?: string;
         username?: string;
         applicationPassword?: string;
@@ -2089,7 +2106,7 @@ export const documentsRouter = createTRPCRouter({
         });
       }
 
-      const siteUrl = normalizeSiteUrl(site.siteUrl);
+      const siteUrl = normalizeSiteUrl(site.siteUrl || "");
       let authHeader = "";
       let apiBaseUrl = `${siteUrl}/wp-json/wp/v2`;
 
@@ -2109,14 +2126,14 @@ export const documentsRouter = createTRPCRouter({
                  console.log("[Publish] Fetched sites:", JSON.stringify(sitesData));
                  if (sitesData.sites && sitesData.sites.length > 0) {
                    // Try to match by URL if possible, otherwise pick the first one
-                   const matchedSite = sitesData.sites.find(s => normalizeSiteUrl(s.URL) === normalizeSiteUrl(site.siteUrl)) || sitesData.sites[0];
+                   const matchedSite = sitesData.sites.find(s => normalizeSiteUrl(s.URL) === normalizeSiteUrl(site.siteUrl || "")) || sitesData.sites[0];
                    if (matchedSite) {
                      console.log("[Publish] Matched site:", matchedSite);
                      credential.blogId = matchedSite.ID;
                      // Update the DB to save this blogId for future use
-                     await db.update(wordpressSites).set({
-                       credential: { ...credential, blogId: matchedSite.ID }
-                     }).where(eq(wordpressSites.id, site.id));
+                     await db.update(integrationAccounts).set({
+                       credentials: { ...credential, blogId: matchedSite.ID }
+                     }).where(eq(integrationAccounts.id, site.id));
                    } else {
                       debugMsg = "No matching site found in user's site list.";
                    }
@@ -2162,35 +2179,44 @@ export const documentsRouter = createTRPCRouter({
         return uploadMediaToWordpress(site, imageUrl);
       });
 
-      const options = input.options ?? {};
-      const status = options.status ?? "draft";
+      const status = input.options?.status ?? "draft";
+      const postType = input.options?.type ?? "post";
 
       const metadata = (access.document.metadata || {}) as Record<string, unknown>;
-      const wordpressMeta = metadata.wordpress as Record<string, { postId: string | number; link: string }> | undefined;
+      const wordpressMeta = metadata.wordpress as Record<string, { postId: string | number; link: string; type?: string }> | undefined;
       const existingPost = wordpressMeta?.[site.id];
 
       const body: Record<string, unknown> = {
-        title: options.title ?? exported.title,
+        title: input.options?.title ?? exported.title,
         content: exported.html,
         status,
       };
 
-      if (options.slug) {
-        body.slug = options.slug;
+      if (input.options?.slug) {
+        body.slug = input.options.slug;
       }
 
-      if (options.categories?.length) {
-        body.categories = options.categories;
-      }
+      // Categories and Tags are only supported for posts
+      if (postType === 'post') {
+        if (input.options?.categories?.length) {
+          body.categories = input.options.categories;
+        }
 
-      if (options.tags?.length) {
-        body.tags = options.tags;
+        if (input.options?.tags?.length) {
+          body.tags = input.options.tags;
+        }
       }
 
       let response: Response;
-      const endpoint = existingPost?.postId
-        ? `${apiBaseUrl}/posts/${existingPost.postId}`
-        : `${apiBaseUrl}/posts`;
+      const endpointType = postType === 'page' ? 'pages' : 'posts';
+      
+      // Check if we should update existing or create new
+      // If existing record has a different type (e.g. was Post, now publishing as Page), we create new
+      const isUpdate = existingPost?.postId && (!existingPost.type || existingPost.type === postType);
+
+      const endpoint = isUpdate
+        ? `${apiBaseUrl}/${endpointType}/${existingPost.postId}`
+        : `${apiBaseUrl}/${endpointType}`;
 
       try {
         response = await fetch(endpoint, {
@@ -2242,6 +2268,7 @@ export const documentsRouter = createTRPCRouter({
         (newMetadata.wordpress as Record<string, unknown>)[site.id] = {
           postId: anyData.id,
           link: anyData.link,
+          type: postType,
           lastPublishedAt: new Date().toISOString(),
         };
 

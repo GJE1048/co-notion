@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/db";
-import { wordpressSites, users } from "@/db/schema";
+import { integrationAccounts, users } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 
 export const dynamic = 'force-dynamic';
@@ -151,38 +151,40 @@ export async function GET(req: NextRequest) {
       // Check if site already exists for this user
       const [existingSite] = await db
         .select()
-        .from(wordpressSites)
+        .from(integrationAccounts)
         .where(
           and(
-            eq(wordpressSites.ownerId, user.id),
+            eq(integrationAccounts.ownerId, user.id),
+            eq(integrationAccounts.platform, "wordpress"),
             // We use siteUrl as a unique identifier for now, as blogId is inside JSONB credential
-            eq(wordpressSites.siteUrl, site.URL)
+            eq(integrationAccounts.siteUrl, site.URL)
           )
         );
 
       if (existingSite) {
          // Update existing site
-         await db.update(wordpressSites).set({
+         await db.update(integrationAccounts).set({
             displayName: site.name,
             authType: "oauth",
-            username: wpUsername,
-            credential: {
+            identifier: wpUsername,
+            credentials: {
                 authType: "oauth",
                 accessToken: access_token,
                 blogId: site.ID,
                 ...tokenData
             },
             updatedAt: new Date(),
-         }).where(eq(wordpressSites.id, existingSite.id));
+         }).where(eq(integrationAccounts.id, existingSite.id));
       } else {
          // Insert new site
-         await db.insert(wordpressSites).values({
+         await db.insert(integrationAccounts).values({
            ownerId: user.id,
+           platform: "wordpress",
            siteUrl: site.URL,
            displayName: site.name,
            authType: "oauth",
-           username: wpUsername,
-           credential: {
+           identifier: wpUsername,
+           credentials: {
                authType: "oauth",
                accessToken: access_token,
                blogId: site.ID,

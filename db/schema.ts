@@ -168,14 +168,16 @@ export const documentTags = pgTable("document_tags", {
     uniqueDocumentTag: uniqueIndex("idx_document_tags_unique").on(table.documentId, table.tagId),
 }));
 
-export const wordpressSites = pgTable("wordpress_sites", {
+export const integrationAccounts = pgTable("integration_accounts", {
     id: uuid("id").primaryKey().defaultRandom(),
     ownerId: uuid("owner_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
-    siteUrl: text("site_url").notNull(),
+    platform: text("platform").notNull(), // 'wordpress', 'ghost', 'medium', etc.
+    siteUrl: text("site_url"),
     displayName: text("display_name").notNull(),
     authType: text("auth_type").notNull(),
-    username: text("username"),
-    credential: jsonb("credential").notNull(),
+    identifier: text("identifier"), // Replaces username
+    credentials: jsonb("credentials").notNull(),
+    metadata: jsonb("metadata").default({}),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -189,6 +191,7 @@ export const usersRelations = relations(users, ({ many }) => ({
     createdBlocks: many(blocks),
     operations: many(operations),
     documentTags: many(documentTags),
+    integrationAccounts: many(integrationAccounts),
 }));
 
 export const workspacesRelations = relations(workspaces, ({ one, many }) => ({
@@ -246,8 +249,8 @@ export const documentCollaboratorsRelations = relations(documentCollaborators, (
     user: one(users, { fields: [documentCollaborators.userId], references: [users.id] }),
 }));
 
-export const wordpressSitesRelations = relations(wordpressSites, ({ one }) => ({
-    owner: one(users, { fields: [wordpressSites.ownerId], references: [users.id] }),
+export const integrationAccountsRelations = relations(integrationAccounts, ({ one }) => ({
+    owner: one(users, { fields: [integrationAccounts.ownerId], references: [users.id] }),
 }));
 
 // Schema definitions
@@ -291,6 +294,6 @@ export const insertDocumentTagSchema = createInsertSchema(documentTags)
 export const selectDocumentTagSchema = createSelectSchema(documentTags)
 export const updateDocumentTagSchema = createUpdateSchema(documentTags)
 
-export const insertWordpressSiteSchema = createInsertSchema(wordpressSites)
-export const selectWordpressSiteSchema = createSelectSchema(wordpressSites)
-export const updateWordpressSiteSchema = createUpdateSchema(wordpressSites)
+export const insertIntegrationAccountSchema = createInsertSchema(integrationAccounts)
+export const selectIntegrationAccountSchema = createSelectSchema(integrationAccounts)
+export const updateIntegrationAccountSchema = createUpdateSchema(integrationAccounts)
