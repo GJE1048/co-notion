@@ -168,6 +168,20 @@ export const documentTags = pgTable("document_tags", {
     uniqueDocumentTag: uniqueIndex("idx_document_tags_unique").on(table.documentId, table.tagId),
 }));
 
+export const integrationAccounts = pgTable("integration_accounts", {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ownerId: uuid("owner_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    platform: text("platform").notNull(), // 'wordpress', 'ghost', 'medium', etc.
+    siteUrl: text("site_url"),
+    displayName: text("display_name").notNull(),
+    authType: text("auth_type").notNull(),
+    identifier: text("identifier"), // Replaces username
+    credentials: jsonb("credentials").notNull(),
+    metadata: jsonb("metadata").default({}),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 // 关系定义
 export const usersRelations = relations(users, ({ many }) => ({
     documents: many(documents),
@@ -177,6 +191,7 @@ export const usersRelations = relations(users, ({ many }) => ({
     createdBlocks: many(blocks),
     operations: many(operations),
     documentTags: many(documentTags),
+    integrationAccounts: many(integrationAccounts),
 }));
 
 export const workspacesRelations = relations(workspaces, ({ one, many }) => ({
@@ -234,6 +249,10 @@ export const documentCollaboratorsRelations = relations(documentCollaborators, (
     user: one(users, { fields: [documentCollaborators.userId], references: [users.id] }),
 }));
 
+export const integrationAccountsRelations = relations(integrationAccounts, ({ one }) => ({
+    owner: one(users, { fields: [integrationAccounts.ownerId], references: [users.id] }),
+}));
+
 // Schema definitions
 export const insertUserSchema = createInsertSchema(users)
 export const selectUserSchema = createSelectSchema(users)
@@ -274,3 +293,7 @@ export const updateTagSchema = createUpdateSchema(tags)
 export const insertDocumentTagSchema = createInsertSchema(documentTags)
 export const selectDocumentTagSchema = createSelectSchema(documentTags)
 export const updateDocumentTagSchema = createUpdateSchema(documentTags)
+
+export const insertIntegrationAccountSchema = createInsertSchema(integrationAccounts)
+export const selectIntegrationAccountSchema = createSelectSchema(integrationAccounts)
+export const updateIntegrationAccountSchema = createUpdateSchema(integrationAccounts)

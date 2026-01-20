@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FlameIcon, HomeIcon, PlaySquareIcon, Share2Icon } from "lucide-react";
+import { FlameIcon, HomeIcon, PlaySquareIcon, Share2Icon, GlobeIcon } from "lucide-react";
 
 import {
   SidebarGroup,
@@ -32,6 +32,11 @@ const items = [
     title: "Templates",
     url: "/templates",
     icon: FlameIcon,
+  },
+  {
+    title: "WordPress",
+    url: "/wordpress",
+    icon: GlobeIcon,
   },
 ];
 

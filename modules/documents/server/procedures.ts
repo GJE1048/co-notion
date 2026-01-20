@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { protectedProcedure, createTRPCRouter } from "@/trpc/init";
 import { db } from "@/db";
-import { documents, blocks, workspaces, operations, users, documentCollaborators, workspaceMembers } from "@/db/schema";
-import { eq, and, desc, asc, sql, gt, or, inArray } from "drizzle-orm";
+import { documents, blocks, workspaces, operations, users, documentCollaborators, workspaceMembers, integrationAccounts } from "@/db/schema";
+import { eq, and, desc, asc, sql, gt, or, inArray, SQL } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { notifyDocumentUpdated } from "@/realtime/notify";
 import { ensurePersonalWorkspace } from "@/lib/workspace";
 import { redis } from "@/lib/redis";
+import { encrypt, decrypt } from "@/lib/crypto";
 
 // Schema definitions
 const createDocumentSchema = z.object({
@@ -124,6 +125,289 @@ const canEditDocumentFromAccess = (record: DocumentAccessRecord | undefined, use
 
 const DOCUMENT_CACHE_TTL_SECONDS = 60;
 const BLOCKS_FIRST_PAGE_TTL_SECONDS = 60;
+
+const wordpressAuthSchema = z.object({
+  siteUrl: z.string().url(),
+  authType: z.enum(["application_password"]),
+  username: z.string().min(1),
+  applicationPassword: z.string().min(1),
+});
+
+type WordpressAuthInput = z.infer<typeof wordpressAuthSchema>;
+
+type WordpressValidationResult = {
+  ok: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+  httpStatus?: number;
+  user?: {
+    id?: number | string;
+    name?: string;
+    slug?: string;
+  };
+};
+
+const normalizeSiteUrl = (siteUrl: string) => {
+  return siteUrl.trim().replace(/\/+$/, "");
+};
+
+const validateWordpressCredentials = async (input: WordpressAuthInput): Promise<WordpressValidationResult> => {
+  const siteUrl = normalizeSiteUrl(input.siteUrl);
+  const authString = `${input.username}:${input.applicationPassword}`;
+  const basic = Buffer.from(authString, "utf8").toString("base64");
+
+  let response: Response;
+  try {
+    response = await fetch(`${siteUrl}/wp-json/wp/v2/users/me`, {
+      method: "GET",
+      headers: {
+        Authorization: `Basic ${basic}`,
+        "Content-Type": "application/json",
+      },
+    });
+  } catch {
+    return {
+      ok: false,
+      errorCode: "NETWORK_ERROR",
+      errorMessage: "无法连接到 WordPress 站点",
+    };
+  }
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      errorCode: "INVALID_CREDENTIALS",
+      errorMessage: "WordPress 凭证无效",
+      httpStatus: response.status,
+      user: undefined,
+    };
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+
+  const anyData = data as { id?: number | string; name?: string; slug?: string; username?: string } | null;
+
+  return {
+    ok: true,
+    user: anyData
+      ? {
+          id: anyData.id,
+          name: anyData.name || anyData.username,
+          slug: anyData.slug,
+        }
+      : undefined,
+  };
+};
+
+const escapeHtml = (value: string) => {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+};
+
+const uploadMediaToWordpress = async (
+  site: typeof integrationAccounts.$inferSelect,
+  imageUrl: string
+): Promise<string | null> => {
+  const siteUrl = normalizeSiteUrl(site.siteUrl || "");
+  const credential = site.credentials as {
+    authType?: string;
+    username?: string;
+    applicationPassword?: string;
+    encryptedPassword?: string;
+    accessToken?: string;
+  };
+  
+  let authHeader = "";
+  if (credential.authType === "oauth" && credential.accessToken) {
+    authHeader = `Bearer ${credential.accessToken}`;
+  } else {
+    const password = credential.applicationPassword || (credential.encryptedPassword ? decrypt(credential.encryptedPassword) : "");
+    const authString = `${credential.username}:${password}`;
+    const basic = Buffer.from(authString, "utf8").toString("base64");
+    authHeader = `Basic ${basic}`;
+  }
+
+  try {
+    let buffer: Buffer;
+    let filename = "image.png";
+    let contentType = "image/png";
+
+    if (imageUrl.startsWith("data:")) {
+      // Handle Data URI
+      const matches = imageUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (!matches || matches.length !== 3) {
+        return null;
+      }
+      contentType = matches[1];
+      buffer = Buffer.from(matches[2], "base64");
+      const ext = contentType.split("/")[1] || "png";
+      filename = `upload-${Date.now()}.${ext}`;
+    } else {
+      // Handle Remote URL
+      const response = await fetch(imageUrl);
+      if (!response.ok) {
+        return null;
+      }
+      const arrayBuffer = await response.arrayBuffer();
+      buffer = Buffer.from(arrayBuffer);
+      contentType = response.headers.get("content-type") || "image/png";
+      const urlPath = new URL(imageUrl).pathname;
+      const urlFilename = urlPath.split("/").pop();
+      if (urlFilename && urlFilename.includes(".")) {
+        filename = urlFilename;
+      } else {
+        const ext = contentType.split("/")[1] || "png";
+        filename = `upload-${Date.now()}.${ext}`;
+      }
+    }
+
+    const response = await fetch(`${siteUrl}/wp-json/wp/v2/media`, {
+      method: "POST",
+      headers: {
+        Authorization: authHeader,
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Type": contentType,
+      },
+      body: buffer as unknown as BodyInit,
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json() as { source_url?: string };
+    return data.source_url || null;
+  } catch (e) {
+    console.error("Failed to upload media to WordPress", e);
+    return null;
+  }
+};
+
+const exportDocumentToHtml = async (
+  documentId: string,
+  imageHandler?: (url: string) => Promise<string | null>
+) => {
+  const [doc] = await db
+    .select({
+      id: documents.id,
+      title: documents.title,
+    })
+    .from(documents)
+    .where(eq(documents.id, documentId));
+
+  if (!doc) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "文档不存在",
+    });
+  }
+
+  const rows = await db
+    .select({
+      id: blocks.id,
+      type: blocks.type,
+      content: blocks.content,
+      position: blocks.position,
+    })
+    .from(blocks)
+    .where(eq(blocks.documentId, documentId))
+    .orderBy(asc(blocks.position));
+
+  const htmlParts: string[] = [];
+
+  for (const row of rows) {
+    const type = row.type;
+    const content = row.content as unknown;
+
+    if (type === "heading_1" || type === "heading_2" || type === "heading_3" || type === "paragraph" || type === "quote") {
+      const value = content as { text?: { content?: string } };
+      const text = escapeHtml(value.text?.content ?? "");
+      if (!text) {
+        continue;
+      }
+      if (type === "heading_1") {
+        htmlParts.push(`<h1>${text}</h1>`);
+      } else if (type === "heading_2") {
+        htmlParts.push(`<h2>${text}</h2>`);
+      } else if (type === "heading_3") {
+        htmlParts.push(`<h3>${text}</h3>`);
+      } else if (type === "quote") {
+        htmlParts.push(`<blockquote>${text}</blockquote>`);
+      } else {
+        htmlParts.push(`<p>${text}</p>`);
+      }
+      continue;
+    }
+
+    if (type === "list") {
+      const value = content as { list?: { items?: string[] } };
+      const items = value.list?.items ?? [];
+      if (!items.length) {
+        continue;
+      }
+      const inner = items.map((item) => `<li>${escapeHtml(item ?? "")}</li>`).join("");
+      htmlParts.push(`<ul>${inner}</ul>`);
+      continue;
+    }
+
+    if (type === "todo") {
+      const value = content as { todo?: { items?: { text?: string; checked?: boolean }[] } };
+      const items = value.todo?.items ?? [];
+      if (!items.length) {
+        continue;
+      }
+      const inner = items
+        .map((item) => {
+          const text = escapeHtml(item.text ?? "");
+          const checked = item.checked ? "true" : "false";
+          return `<li data-checked="${checked}">${text}</li>`;
+        })
+        .join("");
+      htmlParts.push(`<ul class="todo-list">${inner}</ul>`);
+      continue;
+    }
+
+    if (type === "code") {
+      const value = content as { code?: { content?: string; language?: string } };
+      const codeText = escapeHtml(value.code?.content ?? "");
+      const language = value.code?.language || "plaintext";
+      htmlParts.push(`<pre><code class="language-${escapeHtml(language)}">${codeText}</code></pre>`);
+      continue;
+    }
+
+    if (type === "image") {
+      const value = content as { image?: { url?: string; caption?: string } };
+      let url = value.image?.url;
+      if (!url) {
+        continue;
+      }
+
+      if (imageHandler) {
+        const uploadedUrl = await imageHandler(url);
+        if (uploadedUrl) {
+          url = uploadedUrl;
+        }
+      }
+
+      const safeUrl = escapeHtml(url);
+      const caption = value.image?.caption ? escapeHtml(value.image.caption) : "";
+      const captionHtml = caption ? `<figcaption>${caption}</figcaption>` : "";
+      htmlParts.push(`<figure><img src="${safeUrl}" alt="${caption}" />${captionHtml}</figure>`);
+      continue;
+    }
+  }
+
+  const html = htmlParts.join("\n");
+
+  return {
+    title: doc.title,
+    html,
+  };
+};
 
 export const documentsRouter = createTRPCRouter({
   // 获取用户的所有文档
@@ -960,13 +1244,15 @@ export const documentsRouter = createTRPCRouter({
         eq(operations.documentId, input.documentId),
         input.sinceVersion > 0
           ? gt(operations.version, input.sinceVersion)
-          : sql`TRUE`,
+          : undefined,
       ];
+
+      const validConditions = conditions.filter((c): c is SQL => c !== undefined);
 
       const ops = await db
         .select()
         .from(operations)
-        .where(and(...conditions))
+        .where(and(...validConditions))
         .orderBy(asc(operations.version))
         .limit(input.limit);
 
@@ -1523,5 +1809,497 @@ export const documentsRouter = createTRPCRouter({
       }
 
       return { success: true };
+    }),
+  getWordpressSites: protectedProcedure
+    .query(async ({ ctx }) => {
+      const sites = await db
+        .select({
+          id: integrationAccounts.id,
+          siteUrl: integrationAccounts.siteUrl,
+          displayName: integrationAccounts.displayName,
+          authType: integrationAccounts.authType,
+          username: integrationAccounts.identifier,
+          createdAt: integrationAccounts.createdAt,
+          updatedAt: integrationAccounts.updatedAt,
+        })
+        .from(integrationAccounts)
+        .where(and(
+          eq(integrationAccounts.ownerId, ctx.user.id),
+          eq(integrationAccounts.platform, "wordpress")
+        ))
+        .orderBy(desc(integrationAccounts.createdAt));
+
+      return sites;
+    }),
+  validateWordpressSite: protectedProcedure
+    .input(wordpressAuthSchema)
+    .mutation(async ({ input }) => {
+      const result = await validateWordpressCredentials(input);
+      return result;
+    }),
+  bindWordpressSite: protectedProcedure
+    .input(
+      wordpressAuthSchema.extend({
+        displayName: z.string().min(1),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const validation = await validateWordpressCredentials(input);
+
+      if (!validation.ok) {
+        return {
+          ok: false as const,
+          errorCode: validation.errorCode,
+          errorMessage: validation.errorMessage,
+          httpStatus: validation.httpStatus,
+        };
+      }
+
+      const siteUrl = normalizeSiteUrl(input.siteUrl);
+
+      const [site] = await db
+        .insert(integrationAccounts)
+        .values({
+          ownerId: ctx.user.id,
+          platform: "wordpress",
+          siteUrl,
+          displayName: input.displayName,
+          authType: input.authType,
+          identifier: input.username,
+          credentials: {
+            authType: input.authType,
+            username: input.username,
+            encryptedPassword: input.applicationPassword ? encrypt(input.applicationPassword) : undefined,
+          },
+        })
+        .returning({
+          id: integrationAccounts.id,
+          siteUrl: integrationAccounts.siteUrl,
+          displayName: integrationAccounts.displayName,
+          authType: integrationAccounts.authType,
+          username: integrationAccounts.identifier,
+          createdAt: integrationAccounts.createdAt,
+          updatedAt: integrationAccounts.updatedAt,
+        });
+
+      return {
+        ok: true as const,
+        site,
+        validation,
+      };
+    }),
+  getWordpressTaxonomies: protectedProcedure
+    .input(z.object({
+      siteId: z.string(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const [site] = await db
+        .select()
+        .from(integrationAccounts)
+        .where(and(
+          eq(integrationAccounts.id, input.siteId),
+          eq(integrationAccounts.ownerId, ctx.user.id),
+          eq(integrationAccounts.platform, "wordpress")
+        ));
+
+      if (!site) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "无权访问该 WordPress 站点",
+        });
+      }
+
+      const siteUrl = normalizeSiteUrl(site.siteUrl || "");
+      const credential = site.credentials as {
+        authType?: string;
+        username?: string;
+        applicationPassword?: string;
+        encryptedPassword?: string;
+        accessToken?: string;
+        blogId?: string | number;
+      };
+
+      let headers: Record<string, string>;
+      let apiBaseUrl = `${siteUrl}/wp-json/wp/v2`;
+
+      if (credential.authType === "oauth" && credential.accessToken) {
+        headers = { Authorization: `Bearer ${credential.accessToken}` };
+        
+        // Ensure blogId is present (similar logic to publishToWordpress)
+        if (!credential.blogId) {
+             try {
+               const sitesRes = await fetch("https://public-api.wordpress.com/rest/v1.1/me/sites", {
+                 headers
+               });
+               if (sitesRes.ok) {
+                 const sitesData = await sitesRes.json() as { sites: { ID: number; URL: string }[] };
+                 if (sitesData.sites && sitesData.sites.length > 0) {
+                   const matchedSite = sitesData.sites.find(s => normalizeSiteUrl(s.URL) === normalizeSiteUrl(site.siteUrl || "")) || sitesData.sites[0];
+                   if (matchedSite) {
+                     credential.blogId = matchedSite.ID;
+                     // Update DB
+                     await db.update(integrationAccounts).set({
+                       credentials: { ...credential, blogId: matchedSite.ID }
+                     }).where(eq(integrationAccounts.id, site.id));
+                   }
+                 }
+               }
+             } catch (e) {
+               console.error("Failed to fetch sites for OAuth user in taxonomies", e);
+             }
+        }
+
+        if (credential.blogId) {
+          apiBaseUrl = `https://public-api.wordpress.com/wp/v2/sites/${credential.blogId}`;
+        }
+      } else if (credential.username && (credential.applicationPassword || credential.encryptedPassword)) {
+        const password = credential.applicationPassword || decrypt(credential.encryptedPassword!);
+        const authString = `${credential.username}:${password}`;
+        const basic = Buffer.from(authString, "utf8").toString("base64");
+        headers = { Authorization: `Basic ${basic}` };
+      } else {
+        return { categories: [], tags: [] };
+      }
+
+      try {
+        const [categoriesRes, tagsRes] = await Promise.all([
+          fetch(`${apiBaseUrl}/categories?per_page=100`, { headers }),
+          fetch(`${apiBaseUrl}/tags?per_page=100`, { headers }),
+        ]);
+
+        const categories = categoriesRes.ok ? await categoriesRes.json() as { id: number; name: string }[] : [];
+        const tags = tagsRes.ok ? await tagsRes.json() as { id: number; name: string }[] : [];
+
+        return {
+          categories: Array.isArray(categories) ? categories.map(c => ({ id: String(c.id), name: c.name })) : [],
+          tags: Array.isArray(tags) ? tags.map(t => ({ id: String(t.id), name: t.name })) : [],
+        };
+      } catch (e) {
+        console.error("Failed to fetch taxonomies", e);
+        return { categories: [], tags: [] };
+      }
+    }),
+  disconnectWordpressSite: protectedProcedure
+    .input(z.object({ siteId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await db.delete(integrationAccounts)
+        .where(and(
+          eq(integrationAccounts.id, input.siteId),
+          eq(integrationAccounts.ownerId, ctx.user.id),
+          eq(integrationAccounts.platform, "wordpress")
+        ));
+      return { success: true };
+    }),
+  getSitePublishedPosts: protectedProcedure
+    .input(z.object({ siteId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const posts = await db
+        .select({
+          id: documents.id,
+          title: documents.title,
+          updatedAt: documents.updatedAt,
+          metadata: documents.metadata,
+        })
+        .from(documents)
+        .where(and(
+          eq(documents.ownerId, ctx.user.id),
+          sql`(${documents.metadata}->'wordpress'->${input.siteId}) IS NOT NULL`
+        ))
+        .orderBy(desc(documents.updatedAt));
+        
+      return posts.map(doc => {
+         const metadata = doc.metadata as { wordpress?: Record<string, { postId: string | number; link: string; lastPublishedAt: string }> };
+         const wpData = metadata.wordpress?.[input.siteId];
+         return {
+           id: doc.id,
+           title: doc.title,
+           updatedAt: doc.updatedAt,
+           publishedInfo: wpData
+         };
+      });
+    }),
+  publishToWordpress: protectedProcedure
+    .input(
+      z.object({
+        documentId: z.string(),
+        target: z.object({
+          type: z.literal("wordpress"),
+          siteId: z.string(),
+        }),
+        options: z
+          .object({
+            status: z.enum(["draft", "publish"]).optional(),
+            type: z.enum(["post", "page"]).optional().default("post"),
+            slug: z.string().optional(),
+            categories: z.array(z.string()).optional(),
+            tags: z.array(z.string()).optional(),
+            title: z.string().optional(),
+            jetpackSocialOptions: z.object({
+              enabled: z.boolean(),
+              message: z.string().optional(),
+            }).optional(),
+          })
+          .optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [access] = await db
+        .select({
+          document: documents,
+          workspace: workspaces,
+          collaborator: documentCollaborators,
+          workspaceMember: workspaceMembers,
+        })
+        .from(documents)
+        .leftJoin(workspaces, eq(documents.workspaceId, workspaces.id))
+        .leftJoin(documentCollaborators, eq(documentCollaborators.documentId, documents.id))
+        .leftJoin(workspaceMembers, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(and(
+          eq(documents.id, input.documentId),
+          or(
+            eq(documents.ownerId, ctx.user.id),
+            eq(documentCollaborators.userId, ctx.user.id),
+            eq(workspaces.ownerId, ctx.user.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          ),
+        ));
+
+      if (!access) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "文档不存在",
+        });
+      }
+
+      if (!canEditDocumentFromAccess(access, ctx.user.id)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "无权限发布此文档",
+        });
+      }
+
+      const [site] = await db
+        .select()
+        .from(integrationAccounts)
+        .where(and(
+          eq(integrationAccounts.id, input.target.siteId),
+          eq(integrationAccounts.ownerId, ctx.user.id),
+          eq(integrationAccounts.platform, "wordpress")
+        ));
+
+      if (!site) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "无权使用该 WordPress 站点",
+        });
+      }
+
+      const credential = site.credentials as {
+        authType?: string;
+        username?: string;
+        applicationPassword?: string;
+        encryptedPassword?: string;
+        accessToken?: string;
+        blogId?: string | number;
+      };
+
+      if (credential.authType !== "application_password" && credential.authType !== "oauth") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "不支持的认证方式",
+        });
+      }
+
+      const siteUrl = normalizeSiteUrl(site.siteUrl || "");
+      let authHeader = "";
+      let apiBaseUrl = `${siteUrl}/wp-json/wp/v2`;
+
+      if (credential.authType === "oauth" && credential.accessToken) {
+         authHeader = `Bearer ${credential.accessToken}`;
+         
+         // If blogId is missing, try to fetch it from WordPress.com
+         if (!credential.blogId) {
+             console.log("[Publish] blogId missing, attempting to fetch...");
+             let debugMsg = "";
+             try {
+               const sitesRes = await fetch("https://public-api.wordpress.com/rest/v1.1/me/sites", {
+                 headers: { Authorization: authHeader }
+               });
+               if (sitesRes.ok) {
+                 const sitesData = await sitesRes.json() as { sites: { ID: number; URL: string }[] };
+                 console.log("[Publish] Fetched sites:", JSON.stringify(sitesData));
+                 if (sitesData.sites && sitesData.sites.length > 0) {
+                   // Try to match by URL if possible, otherwise pick the first one
+                   const matchedSite = sitesData.sites.find(s => normalizeSiteUrl(s.URL) === normalizeSiteUrl(site.siteUrl || "")) || sitesData.sites[0];
+                   if (matchedSite) {
+                     console.log("[Publish] Matched site:", matchedSite);
+                     credential.blogId = matchedSite.ID;
+                     // Update the DB to save this blogId for future use
+                     await db.update(integrationAccounts).set({
+                       credentials: { ...credential, blogId: matchedSite.ID }
+                     }).where(eq(integrationAccounts.id, site.id));
+                   } else {
+                      debugMsg = "No matching site found in user's site list.";
+                   }
+                 } else {
+                    debugMsg = "User has no sites.";
+                 }
+               } else {
+                  const errText = await sitesRes.text();
+                  debugMsg = `Fetch sites failed: ${sitesRes.status} ${errText}`;
+                  console.error(debugMsg);
+               }
+             } catch (e) {
+               debugMsg = `Fetch sites exception: ${e instanceof Error ? e.message : String(e)}`;
+               console.error("Failed to fetch sites for OAuth user", e);
+             }
+             
+             if (!credential.blogId) {
+                 console.error("[Publish] Still no blogId after fetch attempt:", debugMsg);
+                 throw new TRPCError({
+                    code: "BAD_REQUEST",
+                    message: `无法自动获取 WordPress 站点 ID (blogId)。原因: ${debugMsg || "未知错误"}。请检查您的 WordPress.com 账号下是否有可用站点。`,
+                 });
+             }
+         }
+
+         if (credential.blogId) {
+            apiBaseUrl = `https://public-api.wordpress.com/wp/v2/sites/${credential.blogId}`;
+         }
+         console.log("[Publish] Using apiBaseUrl:", apiBaseUrl, "blogId:", credential.blogId);
+      } else if (credential.username && (credential.applicationPassword || credential.encryptedPassword)) {
+         const password = credential.applicationPassword || decrypt(credential.encryptedPassword!);
+         const authString = `${credential.username}:${password}`;
+         const basic = Buffer.from(authString, "utf8").toString("base64");
+         authHeader = `Basic ${basic}`;
+      } else {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "WordPress 凭证不完整",
+        });
+      }
+
+      const exported = await exportDocumentToHtml(input.documentId, async (imageUrl) => {
+        return uploadMediaToWordpress(site, imageUrl);
+      });
+
+      const status = input.options?.status ?? "draft";
+      const postType = input.options?.type ?? "post";
+
+      const metadata = (access.document.metadata || {}) as Record<string, unknown>;
+      const wordpressMeta = metadata.wordpress as Record<string, { postId: string | number; link: string; type?: string }> | undefined;
+      const existingPost = wordpressMeta?.[site.id];
+
+      const body: Record<string, unknown> = {
+        title: input.options?.title ?? exported.title,
+        content: exported.html,
+        status,
+      };
+
+      if (input.options?.slug) {
+        body.slug = input.options.slug;
+      }
+
+      // Categories and Tags are only supported for posts
+      if (postType === 'post') {
+        if (input.options?.categories?.length) {
+          body.categories = input.options.categories;
+        }
+
+        if (input.options?.tags?.length) {
+          body.tags = input.options.tags;
+        }
+      }
+
+      if (input.options?.jetpackSocialOptions?.enabled) {
+        // If enabled, send the custom message. If message is empty, it might fall back to title or default.
+        // We set it if provided.
+        if (input.options.jetpackSocialOptions.message) {
+           body.jetpack_publicize_message = input.options.jetpackSocialOptions.message;
+        } else {
+           // If enabled but no message, we can default to title or just set it to empty string to trigger default?
+           // Actually, if we just want to ENABLE it, often we don't need to do anything if it's default on.
+           // But if we want to ensure the message is the title:
+           body.jetpack_publicize_message = input.options.title ?? exported.title;
+        }
+      }
+
+      let response: Response;
+      const endpointType = postType === 'page' ? 'pages' : 'posts';
+      
+      // Check if we should update existing or create new
+      // If existing record has a different type (e.g. was Post, now publishing as Page), we create new
+      const isUpdate = existingPost?.postId && (!existingPost.type || existingPost.type === postType);
+
+      const endpoint = isUpdate
+        ? `${apiBaseUrl}/${endpointType}/${existingPost.postId}`
+        : `${apiBaseUrl}/${endpointType}`;
+
+      try {
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: authHeader,
+          },
+          body: JSON.stringify(body),
+        });
+      } catch {
+        return {
+          status: "failed" as const,
+          errorCode: "NETWORK_ERROR",
+          errorMessage: "无法连接到 WordPress 站点",
+        };
+      }
+
+      if (!response.ok) {
+        let errorBody: string | undefined;
+        try {
+          errorBody = await response.text();
+        } catch {
+          errorBody = undefined;
+        }
+        const trimmed = errorBody ? errorBody.slice(0, 500) : undefined;
+        return {
+          status: "failed" as const,
+          errorCode: "WORDPRESS_POST_FAILED",
+          errorMessage: trimmed || "发布到 WordPress 失败",
+          httpStatus: response.status,
+        };
+      }
+
+      let data: unknown;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+
+      const anyData = data as { id?: number | string; link?: string } | null;
+
+      if (anyData?.id) {
+        const newMetadata = { ...metadata };
+        if (!newMetadata.wordpress) {
+          newMetadata.wordpress = {};
+        }
+        (newMetadata.wordpress as Record<string, unknown>)[site.id] = {
+          postId: anyData.id,
+          link: anyData.link,
+          type: postType,
+          lastPublishedAt: new Date().toISOString(),
+        };
+
+        await db
+          .update(documents)
+          .set({ metadata: newMetadata })
+          .where(eq(documents.id, input.documentId));
+      }
+
+      return {
+        status: "success" as const,
+        remotePostId: anyData?.id !== undefined ? String(anyData.id) : undefined,
+        remoteUrl: anyData?.link,
+        httpStatus: response.status,
+      };
     }),
 });

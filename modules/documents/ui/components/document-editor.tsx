@@ -9,8 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { Loader2, Save, ArrowLeft, Plus, Heading1, List, Code, Share, Copy, Trash2, Bot, Send, X } from "lucide-react";
+import { Loader2, Save, ArrowLeft, Plus, Heading1, List, Code, Share, Copy, Trash2, Bot, Send, X, Globe2 } from "lucide-react";
 import { trpc } from "@/trpc/client";
+import { PublishToWordpressDialog } from "./publish-to-wordpress-dialog";
 import { BlockEditor } from "./block-editor";
 import type { documents, blocks, operations as operationsTable } from "@/db/schema";
 
@@ -710,6 +711,7 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
   const [isShareOpen, setIsShareOpen] = useState(false);
   const isDeletingDocument = deleteDocumentMutation.isPending;
   const isDuplicatingDocument = duplicateDocumentMutation.isPending;
+  const [isPublishOpen, setIsPublishOpen] = useState(false);
 
   const handleBlockCreate = useCallback(
     async (blockData: Omit<Block, "id" | "createdAt" | "updatedAt">) => {
@@ -1667,6 +1669,20 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
               </Button>
             </>
           )}
+          {canEditDocument && (
+            <Button
+              onClick={() => {
+                setIsPublishOpen(true);
+              }}
+              disabled={isLoading}
+              size="sm"
+              variant="outline"
+              className="flex items-center gap-2"
+            >
+              <Globe2 className="size-4" />
+              发布
+            </Button>
+          )}
           <Button
             type="button"
             onClick={() => setIsChatSidebarOpen((open) => !open)}
@@ -2335,6 +2351,13 @@ export const DocumentEditor = ({ document: initialDocument }: DocumentEditorProp
           </div>
         </div>
       )}
+
+      <PublishToWordpressDialog
+        open={isPublishOpen}
+        onOpenChange={setIsPublishOpen}
+        documentId={initialDocument.id}
+        documentTitle={title}
+      />
 
       <Dialog
         open={confirmDeleteOpen}

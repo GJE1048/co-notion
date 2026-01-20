@@ -7,6 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Loader2, FileText, Plus, FolderPlus, MoreHorizontal, ChevronsDown } from "lucide-react";
 
 export const DocumentsView = () => {
@@ -26,6 +32,12 @@ export const DocumentsView = () => {
   const [shareDocumentId, setShareDocumentId] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [isBindWordpressOpen, setIsBindWordpressOpen] = useState(false);
+  const [wordpressSiteUrl, setWordpressSiteUrl] = useState("");
+  const [wordpressDisplayName, setWordpressDisplayName] = useState("");
+  const [wordpressUsername, setWordpressUsername] = useState("");
+  const [wordpressApplicationPassword, setWordpressApplicationPassword] = useState("");
+  const [wordpressStatus, setWordpressStatus] = useState<string | null>(null);
 
   const {
     data: documents,
@@ -42,6 +54,24 @@ export const DocumentsView = () => {
     refetchOnWindowFocus: false,
   });
   const utils = trpc.useUtils();
+
+  const bindWordpressSiteMutation = trpc.documents.bindWordpressSite.useMutation({
+    onSuccess: (result) => {
+      if (!result.ok) {
+        setWordpressStatus(result.errorMessage || "绑定失败");
+        return;
+      }
+      setWordpressStatus("绑定成功");
+      utils.documents.getWordpressSites.invalidate().catch(() => {});
+      setWordpressSiteUrl("");
+      setWordpressDisplayName("");
+      setWordpressUsername("");
+      setWordpressApplicationPassword("");
+    },
+    onError: () => {
+      setWordpressStatus("绑定失败");
+    },
+  });
 
   const createDocumentMutation = trpc.documents.createDocument.useMutation({
     onSuccess: (newDocument) => {
@@ -79,6 +109,8 @@ export const DocumentsView = () => {
       window.location.href = `/documents/${newDocument.id}`;
     },
   });
+
+  const updateDocumentMutation = trpc.documents.updateDocument.useMutation();
 
   const createWorkspaceMutation = trpc.workspaces.createWorkspace.useMutation({
     onMutate: async (input) => {
@@ -258,7 +290,7 @@ export const DocumentsView = () => {
         <div className="flex items-center gap-3">
           <Dialog open={isCreateWorkspaceDialogOpen} onOpenChange={setIsCreateWorkspaceDialogOpen}>
             <DialogTrigger asChild>
-              <Button variant="outline" className="flex items-center gap-2">
+              <Button variant="outline" className="flex items-center gap-2" suppressHydrationWarning>
                 <FolderPlus className="size-4" />
                 新建工作区
               </Button>
@@ -321,10 +353,165 @@ export const DocumentsView = () => {
             )}
             新建文档
           </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="flex items-center gap-2" suppressHydrationWarning>
+                更多
+                <MoreHorizontal className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => setIsBindWordpressOpen(true)}>
+                绑定 WordPress 站点
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setIsInviteOpen(true)}>
+                邀请成员
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Dialog open={isBindWordpressOpen} onOpenChange={setIsBindWordpressOpen}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>绑定 WordPress 站点</DialogTitle>
+                <DialogDescription>
+                  输入站点地址和应用密码，将你的 WordPress 站点绑定到当前账号。
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="flex flex-col gap-2 p-4 bg-slate-50 dark:bg-slate-900 rounded-md border border-slate-200 dark:border-slate-800">
+                  <h3 className="text-sm font-medium">推荐方式</h3>
+                  <Button
+                    type="button"
+                    variant="default"
+                    className="w-full bg-[#0087be] hover:bg-[#0073aa] text-white"
+                    onClick={() => {
+                      window.location.href = "/api/oauth/wordpress/connect";
+                    }}
+                  >
+                    连接 WordPress.com
+                  </Button>
+                  <p className="text-xs text-slate-500">
+                    支持 WordPress.com 托管的站点。
+                  </p>
+                </div>
+
+                <div className="relative my-2">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-slate-200 dark:border-slate-700" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white dark:bg-slate-950 px-2 text-slate-500">
+                      或者手动配置 (Self-hosted)
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    站点地址
+                  </label>
+                  <Input
+                    type="url"
+                    placeholder="例如：https://example.com"
+                    value={wordpressSiteUrl}
+                    onChange={(e) => setWordpressSiteUrl(e.target.value)}
+                    disabled={bindWordpressSiteMutation.isPending}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    显示名称
+                  </label>
+                  <Input
+                    type="text"
+                    placeholder="为此站点起一个名称，便于识别"
+                    value={wordpressDisplayName}
+                    onChange={(e) => setWordpressDisplayName(e.target.value)}
+                    disabled={bindWordpressSiteMutation.isPending}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    WordPress 用户名
+                  </label>
+                  <Input
+                    type="text"
+                    placeholder="用于生成应用密码的用户名"
+                    value={wordpressUsername}
+                    onChange={(e) => setWordpressUsername(e.target.value)}
+                    disabled={bindWordpressSiteMutation.isPending}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    应用密码
+                  </label>
+                  <Input
+                    type="password"
+                    placeholder="在 WordPress 后台生成的 Application Password"
+                    value={wordpressApplicationPassword}
+                    onChange={(e) => setWordpressApplicationPassword(e.target.value)}
+                    disabled={bindWordpressSiteMutation.isPending}
+                    className="mt-1"
+                  />
+                </div>
+                {wordpressStatus && (
+                  <p className="text-sm text-slate-600 dark:text-slate-400">
+                    {wordpressStatus}
+                  </p>
+                )}
+              </div>
+              <DialogFooter className="pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    if (bindWordpressSiteMutation.isPending) return;
+                    setIsBindWordpressOpen(false);
+                    setWordpressStatus(null);
+                  }}
+                  disabled={bindWordpressSiteMutation.isPending}
+                >
+                  取消
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    setWordpressStatus(null);
+                    bindWordpressSiteMutation.mutate({
+                      siteUrl: wordpressSiteUrl,
+                      authType: "application_password",
+                      username: wordpressUsername,
+                      applicationPassword: wordpressApplicationPassword,
+                      displayName: wordpressDisplayName || wordpressSiteUrl,
+                    });
+                  }}
+                  disabled={
+                    bindWordpressSiteMutation.isPending ||
+                    !wordpressSiteUrl ||
+                    !wordpressUsername ||
+                    !wordpressApplicationPassword
+                  }
+                >
+                  {bindWordpressSiteMutation.isPending ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin mr-2" />
+                      绑定中...
+                    </>
+                  ) : (
+                    "绑定"
+                  )}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
           <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline">邀请成员</Button>
-            </DialogTrigger>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
                 <DialogTitle>邀请用户到工作区</DialogTitle>
@@ -789,7 +976,7 @@ export const DocumentsView = () => {
               onClick={async () => {
                 if (!moveDocumentId || !moveTargetWorkspaceId) return;
                 try {
-                  await trpc.documents.updateDocument.mutateAsync({
+                  await updateDocumentMutation.mutateAsync({
                     id: moveDocumentId,
                     data: { workspaceId: moveTargetWorkspaceId },
                   } as never);
