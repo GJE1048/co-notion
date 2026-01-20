@@ -84,26 +84,39 @@ export async function GET(req: NextRequest) {
     type SiteInfo = { ID: number; URL: string; name: string };
     const sitesToAdd: SiteInfo[] = [];
 
-    if (blog_id && blog_url) {
-       // Single site authorized
-       let displayName = `WordPress Site (${blog_url})`;
-       // Try to get site title
+    // Helper to fetch site info
+    const fetchSiteInfo = async (siteId: number | string) => {
        try {
-          const siteRes = await fetch(`https://public-api.wordpress.com/rest/v1.1/sites/${blog_id}`, {
+          const siteRes = await fetch(`https://public-api.wordpress.com/rest/v1.1/sites/${siteId}`, {
              headers: { Authorization: `Bearer ${access_token}` },
           });
           if (siteRes.ok) {
-            const siteData = await siteRes.json();
-            if (siteData.name) {
-               displayName = siteData.name;
-            }
+            return await siteRes.json();
           }
        } catch (e) {
-          console.error("Failed to fetch site info", e);
+          console.error(`Failed to fetch site info for ${siteId}`, e);
        }
-       sitesToAdd.push({ ID: blog_id, URL: blog_url, name: displayName });
-    } else {
-       // Fetch all sites
+       return null;
+    };
+
+    if (blog_id) {
+       // Single site authorized (even if blog_url is missing in token response, we trust blog_id)
+       let siteUrl = blog_url;
+       let displayName = blog_url ? `WordPress Site (${blog_url})` : "WordPress Site";
+       
+       const siteData = await fetchSiteInfo(blog_id);
+       if (siteData) {
+          if (siteData.URL) siteUrl = siteData.URL;
+          if (siteData.name) displayName = siteData.name;
+       }
+
+       if (siteUrl) {
+          sitesToAdd.push({ ID: blog_id, URL: siteUrl, name: displayName });
+       }
+    } 
+    
+    // If no site added yet (or global auth), fetch all sites
+    if (sitesToAdd.length === 0) {
        try {
          const sitesRes = await fetch("https://public-api.wordpress.com/rest/v1.1/me/sites", {
            headers: { Authorization: `Bearer ${access_token}` },
@@ -112,11 +125,13 @@ export async function GET(req: NextRequest) {
            const sitesData = await sitesRes.json();
            if (sitesData.sites && Array.isArray(sitesData.sites)) {
               sitesData.sites.forEach((s: { ID: number; URL: string; name: string }) => {
-                sitesToAdd.push({
-                  ID: s.ID,
-                  URL: s.URL,
-                  name: s.name || `WordPress Site (${s.URL})`
-                });
+                if (s.URL) {
+                    sitesToAdd.push({
+                      ID: s.ID,
+                      URL: s.URL,
+                      name: s.name || `WordPress Site (${s.URL})`
+                    });
+                }
               });
             }
          }
@@ -126,13 +141,10 @@ export async function GET(req: NextRequest) {
     }
 
     if (sitesToAdd.length === 0) {
-       // Fallback if absolutely nothing found (should rarely happen if auth succeeded)
-       sitesToAdd.push({
-         ID: 0, 
-         URL: "https://wordpress.com", 
-         name: "WordPress.com Site (Unknown)"
-       });
+       console.warn("No WordPress sites found for user", wpUsername);
+       return NextResponse.redirect(new URL("/documents?error=wordpress_no_sites_found", req.url));
     }
+
 
     // Save to DB
     for (const site of sitesToAdd) {

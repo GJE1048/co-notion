@@ -1971,6 +1971,41 @@ export const documentsRouter = createTRPCRouter({
         return { categories: [], tags: [] };
       }
     }),
+  disconnectWordpressSite: protectedProcedure
+    .input(z.object({ siteId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await db.delete(wordpressSites)
+        .where(and(eq(wordpressSites.id, input.siteId), eq(wordpressSites.ownerId, ctx.user.id)));
+      return { success: true };
+    }),
+  getSitePublishedPosts: protectedProcedure
+    .input(z.object({ siteId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const posts = await db
+        .select({
+          id: documents.id,
+          title: documents.title,
+          updatedAt: documents.updatedAt,
+          metadata: documents.metadata,
+        })
+        .from(documents)
+        .where(and(
+          eq(documents.ownerId, ctx.user.id),
+          sql`(${documents.metadata}->'wordpress'->${input.siteId}) IS NOT NULL`
+        ))
+        .orderBy(desc(documents.updatedAt));
+        
+      return posts.map(doc => {
+         const metadata = doc.metadata as { wordpress?: Record<string, { postId: string | number; link: string; lastPublishedAt: string }> };
+         const wpData = metadata.wordpress?.[input.siteId];
+         return {
+           id: doc.id,
+           title: doc.title,
+           updatedAt: doc.updatedAt,
+           publishedInfo: wpData
+         };
+      });
+    }),
   publishToWordpress: protectedProcedure
     .input(
       z.object({
